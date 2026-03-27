@@ -12,10 +12,12 @@ Setup:
   5. python bot.py
 
 Commands:
-  /status       — (admin) everyone's contribution status this period
   /mystatus     — your own contribution count
   /period       — current period dates and deadline
-  /setstart DD/MM/YYYY  — (admin) start a new period (resets contributions)
+  /status       — (admin) everyone's contribution status
+  /scan         — (admin) register all group admins
+  /addmember    — (admin) reply to a message to register that member
+  /setstart DD/MM/YYYY  — (admin) start a new period
 """
 
 import os
@@ -23,10 +25,10 @@ import json
 import logging
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
-from telegram import Update, BotCommand
+from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
-    ChatMemberHandler, filters, ContextTypes
+    ChatMemberHandler, CallbackQueryHandler, filters, ContextTypes
 )
 
 logging.basicConfig(
@@ -37,21 +39,19 @@ logging.basicConfig(
 # ── Config ────────────────────────────────────────────────────────────────────
 BOT_TOKEN          = os.getenv('BOT_TOKEN',          '8745432625:AAEcTZSsGqvfmOlUGx5463qtamomRnVnoHk')
 ADMIN_IDS          = [int(x) for x in os.getenv('ADMIN_IDS', '411713323').split(',')]
-STORAGE_CHANNEL_ID = int(os.getenv('STORAGE_CHANNEL_ID', '411713323'))  # private channel ID
+STORAGE_CHANNEL_ID = int(os.getenv('STORAGE_CHANNEL_ID', '411713323'))
 REQUIRED_PDFS      = 2
 PERIOD_MONTHS      = 3
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 # ── Telegram as storage ───────────────────────────────────────────────────────
-# Data is stored as a single JSON message pinned in the storage channel.
-# Load = read pinned message.  Save = edit pinned message.
-
 def _default_data() -> dict:
     return {
         'period_start':  datetime.now().strftime('%Y-%m-%d'),
         'members':       {},   # { "user_id": {"name": "...", "username": "..."} }
-        'contributions': {}    # { "user_id": ["file1.pdf", "file2.pdf"] }
+        'contributions': {},   # { "user_id": ["file1.pdf", "file2.pdf"] }
+        'pending':       {}    # { "orig_msg_id": {"user_id": "...", "filename": "..."} }
     }
 
 
@@ -59,7 +59,9 @@ async def tg_load(bot) -> dict:
     try:
         chat = await bot.get_chat(STORAGE_CHANNEL_ID)
         if chat.pinned_message and chat.pinned_message.text:
-            return json.loads(chat.pinned_message.text)
+            data = json.loads(chat.pinned_message.text)
+            data.setdefault('pending', {})   # handle old data without pending key
+            return data
     except Exception as e:
         logging.warning(f"Load failed: {e}")
     return _default_data()
@@ -76,7 +78,6 @@ async def tg_save(bot, data: dict):
                 text=text
             )
         else:
-            # First save — send and pin the message
             msg = await bot.send_message(STORAGE_CHANNEL_ID, text)
             await bot.pin_chat_message(STORAGE_CHANNEL_ID, msg.message_id,
                                        disable_notification=True)
@@ -85,13 +86,14 @@ async def tg_save(bot, data: dict):
 
 
 async def load_and_check(bot) -> dict:
-    """Load data and auto-reset if the period has expired."""
+    """Load data and auto-reset contributions if the period has expired."""
     data = await tg_load(bot)
     start = datetime.strptime(data['period_start'], '%Y-%m-%d')
     end   = start + relativedelta(months=PERIOD_MONTHS)
     if datetime.now() >= end:
         data['period_start']  = end.strftime('%Y-%m-%d')
         data['contributions'] = {}
+        data['pending']       = {}
         await tg_save(bot, data)
         logging.info(f"Period auto-reset. New start: {data['period_start']}")
     return data
@@ -133,7 +135,6 @@ async def on_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = result.new_chat_member.user
     if u.is_bot or result.new_chat_member.status in ('left', 'kicked', 'banned'):
         return
-
     data = await load_and_check(context.bot)
     data['members'][str(u.id)] = {'name': u.full_name, 'username': u.username or ''}
     await tg_save(context.bot, data)
@@ -154,26 +155,85 @@ async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     data = await load_and_check(context.bot)
 
-    uid = str(user.id)
-    data['members'][uid] = {'name': user.full_name, 'username': user.username or ''}
-    data['contributions'].setdefault(uid, [])
-
+    uid      = str(user.id)
     filename = doc.file_name or f'file_{msg.message_id}.pdf'
-    data['contributions'][uid].append(filename)
-    count = len(data['contributions'][uid])
 
+    # Register member if not already tracked
+    data['members'][uid] = {'name': user.full_name, 'username': user.username or ''}
+
+    # Store as pending — awaiting admin approval
+    data['pending'][str(msg.message_id)] = {
+        'user_id':  uid,
+        'filename': filename,
+    }
     await tg_save(context.bot, data)
 
-    _, end = period_dates(data)
-    if count == REQUIRED_PDFS:
-        await msg.reply_text(
-            f"Thanks {user.first_name}! {count}/{REQUIRED_PDFS} PDFs uploaded. Requirement met! ✅"
+    # Send approval request with Approve / Reject buttons
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Approve", callback_data=f"approve:{uid}:{msg.message_id}"),
+        InlineKeyboardButton("❌ Reject",  callback_data=f"reject:{uid}:{msg.message_id}"),
+    ]])
+    await msg.reply_text(
+        f"📄 *{user.full_name}* uploaded `{filename}`\n"
+        f"Waiting for admin approval.",
+        parse_mode='Markdown',
+        reply_markup=keyboard
+    )
+
+
+async def on_approval(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle Approve / Reject button presses."""
+    query = update.callback_query
+
+    # Only admins can approve/reject
+    if not is_admin(query.from_user.id):
+        await query.answer("Only admins can approve or reject.", show_alert=True)
+        return
+
+    await query.answer()
+
+    parts   = query.data.split(':')
+    action  = parts[0]           # 'approve' or 'reject'
+    uid     = parts[1]
+    msg_id  = parts[2]
+
+    data = await load_and_check(context.bot)
+    pending = data.get('pending', {})
+
+    if msg_id not in pending:
+        await query.edit_message_text("⚠️ This submission was already processed.")
+        return
+
+    entry    = pending.pop(msg_id)
+    filename = entry['filename']
+    member   = data['members'].get(uid, {})
+    name     = member.get('name', 'Member')
+    admin_name = query.from_user.first_name
+
+    if action == 'approve':
+        data['contributions'].setdefault(uid, []).append(filename)
+        count = len(data['contributions'][uid])
+        _, end = period_dates(data)
+
+        progress = f"{count}/{REQUIRED_PDFS} PDFs this period"
+        extra    = " — Requirement met! 🎉" if count >= REQUIRED_PDFS else f" — {REQUIRED_PDFS - count} more needed"
+
+        await query.edit_message_text(
+            f"✅ *Approved* by {admin_name}\n"
+            f"👤 {name}: `{filename}`\n"
+            f"{progress}{extra}",
+            parse_mode='Markdown'
         )
-    elif count < REQUIRED_PDFS:
-        await msg.reply_text(
-            f"Got it {user.first_name}! {count}/{REQUIRED_PDFS} PDFs uploaded. "
-            f"{REQUIRED_PDFS - count} more needed before {fmt(end)}."
+    else:
+        await query.edit_message_text(
+            f"❌ *Rejected* by {admin_name}\n"
+            f"👤 {name}: `{filename}`\n"
+            f"This PDF was not counted.",
+            parse_mode='Markdown'
         )
+
+    data['pending'] = pending
+    await tg_save(context.bot, data)
 
 
 async def cmd_period(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -200,15 +260,22 @@ async def cmd_mystatus(update: Update, context: ContextTypes.DEFAULT_TYPE):
     count = len(files)
     icon  = "✅" if count >= REQUIRED_PDFS else "❌"
 
+    # Check if they have pending submissions
+    pending_count = sum(
+        1 for p in data['pending'].values() if p['user_id'] == uid
+    )
+
     text = (
         f"{icon} *Your Status*\n"
         f"({fmt(start)} – {fmt(end)})\n\n"
-        f"Uploaded: {count}/{REQUIRED_PDFS} PDFs\n"
+        f"Approved: {count}/{REQUIRED_PDFS} PDFs\n"
     )
+    if pending_count:
+        text += f"Pending approval: {pending_count} PDF(s)\n"
     if files:
-        text += "\nFiles:\n" + "\n".join(f"  • {f}" for f in files)
+        text += "\nApproved files:\n" + "\n".join(f"  • {f}" for f in files)
     if count < REQUIRED_PDFS:
-        text += f"\n\n{REQUIRED_PDFS - count} more PDF(s) needed before {fmt(end)}."
+        text += f"\n\n{REQUIRED_PDFS - count} more approved PDF(s) needed before {fmt(end)}."
 
     await update.message.reply_text(text, parse_mode='Markdown')
 
@@ -226,14 +293,16 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("No members tracked yet.")
         return
 
-    done, pending = [], []
+    done, waiting = [], []
     for uid, info in members.items():
-        count = len(data['contributions'].get(uid, []))
-        label = info['name'] + (f" (@{info['username']})" if info['username'] else '')
+        count   = len(data['contributions'].get(uid, []))
+        pending = sum(1 for p in data['pending'].values() if p['user_id'] == uid)
+        label   = info['name'] + (f" (@{info['username']})" if info['username'] else '')
         if count >= REQUIRED_PDFS:
             done.append(f"  ✅ {label}")
         else:
-            pending.append(f"  ❌ {label} ({count}/{REQUIRED_PDFS})")
+            note = f" (+{pending} pending)" if pending else ""
+            waiting.append(f"  ❌ {label} ({count}/{REQUIRED_PDFS}{note})")
 
     total = len(members)
     text  = (
@@ -241,8 +310,8 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"({fmt(start)} – {fmt(end)})\n\n"
         f"✅ Done ({len(done)}/{total}):\n"
         + ("\n".join(done) or "  (none yet)") + "\n\n"
-        f"❌ Pending ({len(pending)}/{total}):\n"
-        + ("\n".join(pending) or "  (all done!)")
+        f"❌ Pending ({len(waiting)}/{total}):\n"
+        + ("\n".join(waiting) or "  (all done!)")
     )
     await update.message.reply_text(text, parse_mode='Markdown')
 
@@ -265,22 +334,22 @@ async def cmd_setstart(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = await tg_load(context.bot)
     data['period_start']  = dt.strftime('%Y-%m-%d')
     data['contributions'] = {}
+    data['pending']       = {}
     await tg_save(context.bot, data)
 
     _, end = period_dates(data)
     await update.message.reply_text(
         f"New period started: {fmt(dt)} → {fmt(end)}\n"
-        f"Contributions have been reset."
+        f"Contributions and pending approvals have been reset."
     )
 
 
 async def cmd_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """(Admin) Fetch all group admins and register them."""
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("This command is for admins only.")
         return
 
-    chat = update.effective_chat
+    chat   = update.effective_chat
     admins = await chat.get_administrators()
     data   = await load_and_check(context.bot)
 
@@ -303,22 +372,16 @@ async def cmd_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     else:
         await update.message.reply_text(
-            "Scanned admins — no new members found.\n\n"
-            "For non-admin members, ask them to send any message or type /mystatus in the group. "
-            "They'll be registered automatically."
+            "Scanned admins — no new members to add.\n\n"
+            "For regular members, ask them to send any message and they'll be registered automatically."
         )
 
 
 async def cmd_addmember(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """(Admin) Manually add a member by forwarding their message or by user ID.
-    Usage: /addmember @username Full Name
-       or: /addmember 123456789 Full Name
-    """
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("This command is for admins only.")
         return
 
-    # If replying to a message, register that user
     if update.message.reply_to_message:
         u = update.message.reply_to_message.from_user
         if u and not u.is_bot:
@@ -329,15 +392,14 @@ async def cmd_addmember(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     await update.message.reply_text(
-        "Reply to any message from the member you want to add, then use /addmember.\n"
-        "Example: reply to John's message and send /addmember"
+        "Reply to any message from the member you want to add, then send /addmember."
     )
 
 
-# ── Register commands (shows up when user types /) ────────────────────────────
+# ── Register commands ─────────────────────────────────────────────────────────
 async def post_init(app: Application):
     await app.bot.set_my_commands([
-        BotCommand('mystatus',   'Check your own PDF contribution count'),
+        BotCommand('mystatus',   'Check your own contribution status'),
         BotCommand('period',     'Show current period dates and deadline'),
         BotCommand('status',     '(Admin) Show all members contribution status'),
         BotCommand('scan',       '(Admin) Register all group admins'),
@@ -357,13 +419,14 @@ def main():
         print("ERROR: Set BOT_TOKEN.")
         return
     if not STORAGE_CHANNEL_ID:
-        print("ERROR: Set STORAGE_CHANNEL_ID — create a private channel, add the bot as admin, get its ID.")
+        print("ERROR: Set STORAGE_CHANNEL_ID.")
         return
 
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
     app.add_handler(ChatMemberHandler(on_new_member, ChatMemberHandler.CHAT_MEMBER))
     app.add_handler(MessageHandler(filters.Document.ALL, on_document))
     app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, on_any_message))
+    app.add_handler(CallbackQueryHandler(on_approval, pattern=r'^(approve|reject):'))
     app.add_handler(CommandHandler('period',    cmd_period))
     app.add_handler(CommandHandler('mystatus',  cmd_mystatus))
     app.add_handler(CommandHandler('status',    cmd_status))
