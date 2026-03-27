@@ -60,14 +60,15 @@ async def tg_load(bot) -> dict:
         chat = await bot.get_chat(STORAGE_CHANNEL_ID)
         if chat.pinned_message and chat.pinned_message.text:
             data = json.loads(chat.pinned_message.text)
-            data.setdefault('pending', {})   # handle old data without pending key
+            data.setdefault('pending', {})
             return data
     except Exception as e:
         logging.warning(f"Load failed: {e}")
     return _default_data()
 
 
-async def tg_save(bot, data: dict):
+async def tg_save(bot, data: dict) -> str | None:
+    """Save data. Returns None on success, or an error string on failure."""
     text = json.dumps(data, ensure_ascii=False)
     try:
         chat = await bot.get_chat(STORAGE_CHANNEL_ID)
@@ -81,8 +82,10 @@ async def tg_save(bot, data: dict):
             msg = await bot.send_message(STORAGE_CHANNEL_ID, text)
             await bot.pin_chat_message(STORAGE_CHANNEL_ID, msg.message_id,
                                        disable_notification=True)
+        return None
     except Exception as e:
         logging.error(f"Save failed: {e}")
+        return str(e)
 
 
 async def load_and_check(bot) -> dict:
@@ -469,9 +472,15 @@ async def cmd_addmember(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid     = str(u.id)
     already = uid in data['members']
     data['members'][uid] = {'name': u.full_name, 'username': u.username or ''}
-    await tg_save(context.bot, data)
+    err = await tg_save(context.bot, data)
 
-    if already:
+    if err:
+        await update.message.reply_text(
+            f"Storage error — could not save.\n\n"
+            f"Error: {err}\n\n"
+            f"Run /debug to check the storage channel setup."
+        )
+    elif already:
         await update.message.reply_text(f"Updated: {u.full_name} (already registered)")
     else:
         await update.message.reply_text(f"Added: {u.full_name}")
