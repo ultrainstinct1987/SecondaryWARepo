@@ -297,7 +297,15 @@ async def on_paper_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         col['year'] = value
         col['step'] = 'school'
         await query.edit_message_text(
-            f"Step 5/5 — Type the <b>school name</b> and send it:\n<i>{summary_text(col)}</i>",
+            f"<i>{summary_text(col)}</i>",
+            parse_mode='HTML'
+        )
+        await context.bot.send_message(
+            col['chat_id'],
+            "⬇️ <b>Last step!</b>\n\n"
+            "Type the <b>school name</b> in the chat and send it.\n"
+            "Example: <code>Anglican High</code>",
+            message_thread_id=col.get('thread_id'),
             parse_mode='HTML'
         )
 
