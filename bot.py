@@ -553,12 +553,16 @@ async def cmd_period(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = await load_and_check(context.bot)
     start, end = period_dates(data)
     days_left  = max(0, (end - datetime.now()).days)
-    reply = await update.message.reply_text(
-        f"📅 <b>Current Period</b>\n"
-        f"Start    : {fmt(start)}\n"
-        f"End      : {fmt(end)}\n"
-        f"Days left: {days_left}\n\n"
-        f"Requirement: {REQUIRED_PDFS} PDFs per member",
+    reply = await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        message_thread_id=update.message.message_thread_id,
+        text=(
+            f"📅 <b>Current Period</b>\n"
+            f"Start    : {fmt(start)}\n"
+            f"End      : {fmt(end)}\n"
+            f"Days left: {days_left}\n\n"
+            f"Requirement: {REQUIRED_PDFS} PDFs per member"
+        ),
         parse_mode='HTML'
     )
     asyncio.create_task(_delete_after(context.bot, reply.chat_id, reply.message_id, delay=30))
@@ -592,7 +596,12 @@ async def cmd_mystatus(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if count < REQUIRED_PDFS:
         text += f"\n\n{REQUIRED_PDFS - count} more approved PDF(s) needed before {fmt(end)}."
 
-    reply = await update.message.reply_text(text, parse_mode='HTML')
+    reply = await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        message_thread_id=update.message.message_thread_id,
+        text=text,
+        parse_mode='HTML'
+    )
     asyncio.create_task(_delete_after(context.bot, reply.chat_id, reply.message_id, delay=30))
 
 
@@ -606,7 +615,11 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     members = data['members']
 
     if not members:
-        r = await update.message.reply_text("No members tracked yet.")
+        r = await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            message_thread_id=update.message.message_thread_id,
+            text="No members tracked yet."
+        )
         asyncio.create_task(_delete_after(context.bot, r.chat_id, r.message_id, delay=30))
         return
 
@@ -630,7 +643,12 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"❌ Pending ({len(waiting)}/{total}):\n"
         + ("\n".join(waiting) or "  (all done!)")
     )
-    r = await update.message.reply_text(text, parse_mode='HTML')
+    r = await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        message_thread_id=update.message.message_thread_id,
+        text=text,
+        parse_mode='HTML'
+    )
     asyncio.create_task(_delete_after(context.bot, r.chat_id, r.message_id, delay=30))
 
 
@@ -640,14 +658,22 @@ async def cmd_setstart(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if not context.args:
-        r = await update.message.reply_text("Usage: /setstart DD/MM/YYYY\nExample: /setstart 01/04/2025")
+        r = await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            message_thread_id=update.message.message_thread_id,
+            text="Usage: /setstart DD/MM/YYYY\nExample: /setstart 01/04/2025"
+        )
         asyncio.create_task(_delete_after(context.bot, r.chat_id, r.message_id, delay=30))
         return
 
     try:
         dt = datetime.strptime(context.args[0], '%d/%m/%Y')
     except ValueError:
-        r = await update.message.reply_text("Invalid date. Use DD/MM/YYYY, e.g. 01/04/2025")
+        r = await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            message_thread_id=update.message.message_thread_id,
+            text="Invalid date. Use DD/MM/YYYY, e.g. 01/04/2025"
+        )
         asyncio.create_task(_delete_after(context.bot, r.chat_id, r.message_id, delay=30))
         return
 
@@ -658,9 +684,13 @@ async def cmd_setstart(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await tg_save(context.bot, data)
 
     _, end = period_dates(data)
-    r = await update.message.reply_text(
-        f"New period started: {fmt(dt)} → {fmt(end)}\n"
-        f"Contributions and pending approvals have been reset."
+    r = await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        message_thread_id=update.message.message_thread_id,
+        text=(
+            f"New period started: {fmt(dt)} → {fmt(end)}\n"
+            f"Contributions and pending approvals have been reset."
+        )
     )
     asyncio.create_task(_delete_after(context.bot, r.chat_id, r.message_id, delay=30))
 
@@ -676,10 +706,14 @@ async def cmd_resetperiod(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data['pending']       = {}
     await tg_save(context.bot, data)
 
-    r = await update.message.reply_text(
-        f"🗑 <b>Period reset.</b>\n"
-        f"All contributions and pending approvals cleared.\n"
-        f"Period dates unchanged: {fmt(start)} → {fmt(end)}",
+    r = await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        message_thread_id=update.message.message_thread_id,
+        text=(
+            f"🗑 <b>Period reset.</b>\n"
+            f"All contributions and pending approvals cleared.\n"
+            f"Period dates unchanged: {fmt(start)} → {fmt(end)}"
+        ),
         parse_mode='HTML'
     )
     asyncio.create_task(_delete_after(context.bot, r.chat_id, r.message_id, delay=30))
@@ -698,10 +732,14 @@ async def cmd_newperiod(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await tg_save(context.bot, data)
 
     _, end = period_dates(data)
-    r = await update.message.reply_text(
-        f"🆕 <b>New period started.</b>\n"
-        f"{fmt(today)} → {fmt(end)}\n"
-        f"All contributions and pending approvals have been reset.",
+    r = await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        message_thread_id=update.message.message_thread_id,
+        text=(
+            f"🆕 <b>New period started.</b>\n"
+            f"{fmt(today)} → {fmt(end)}\n"
+            f"All contributions and pending approvals have been reset."
+        ),
         parse_mode='HTML'
     )
     asyncio.create_task(_delete_after(context.bot, r.chat_id, r.message_id, delay=30))
@@ -729,15 +767,17 @@ async def cmd_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await tg_save(context.bot, data)
 
     if added:
-        r = await update.message.reply_text(
-            f"Scanned admins. Added {len(added)} new member(s):\n" +
-            "\n".join(f"  • {n}" for n in added)
-        )
+        msg_text = f"Scanned admins. Added {len(added)} new member(s):\n" + "\n".join(f"  • {n}" for n in added)
     else:
-        r = await update.message.reply_text(
+        msg_text = (
             "Scanned admins — no new members to add.\n\n"
             "For regular members, ask them to send any message and they'll be registered automatically."
         )
+    r = await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        message_thread_id=update.message.message_thread_id,
+        text=msg_text
+    )
     asyncio.create_task(_delete_after(context.bot, r.chat_id, r.message_id, delay=30))
 
 
@@ -750,9 +790,13 @@ async def cmd_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
     members = data['members']
 
     if not members:
-        r = await update.message.reply_text(
-            "No members registered yet.\n\n"
-            "Run /debug to check if storage is working, then use /scan to add admins."
+        r = await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            message_thread_id=update.message.message_thread_id,
+            text=(
+                "No members registered yet.\n\n"
+                "Run /debug to check if storage is working, then use /scan to add admins."
+            )
         )
         asyncio.create_task(_delete_after(context.bot, r.chat_id, r.message_id, delay=30))
         return
@@ -763,7 +807,12 @@ async def cmd_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
         uname = f" @{info['username']}" if info.get('username') else ''
         lines.append(f"{i}. {name}{uname}")
 
-    r = await update.message.reply_text("\n".join(lines), parse_mode='HTML')
+    r = await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        message_thread_id=update.message.message_thread_id,
+        text="\n".join(lines),
+        parse_mode='HTML'
+    )
     asyncio.create_task(_delete_after(context.bot, r.chat_id, r.message_id, delay=30))
 
 
@@ -804,7 +853,12 @@ async def cmd_debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "then set STORAGE_CHANNEL_ID to that value."
         )
 
-    r = await update.message.reply_text("\n".join(lines), parse_mode='HTML')
+    r = await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        message_thread_id=update.message.message_thread_id,
+        text="\n".join(lines),
+        parse_mode='HTML'
+    )
     asyncio.create_task(_delete_after(context.bot, r.chat_id, r.message_id, delay=30))
 
 
@@ -815,20 +869,31 @@ async def cmd_addmember(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     replied = update.message.reply_to_message
 
+    chat_id   = update.effective_chat.id
+    thread_id = update.message.message_thread_id
+
     if not replied:
-        r = await update.message.reply_text(
-            "How to use:\n"
-            "1. Long-press any message from the member\n"
-            "2. Tap Reply\n"
-            "3. Type /addmember manually (do not pick from the / menu)\n"
-            "4. Send"
+        r = await context.bot.send_message(
+            chat_id=chat_id,
+            message_thread_id=thread_id,
+            text=(
+                "How to use:\n"
+                "1. Long-press any message from the member\n"
+                "2. Tap Reply\n"
+                "3. Type /addmember manually (do not pick from the / menu)\n"
+                "4. Send"
+            )
         )
         asyncio.create_task(_delete_after(context.bot, r.chat_id, r.message_id, delay=30))
         return
 
     u = replied.from_user
     if not u or u.is_bot:
-        r = await update.message.reply_text("That message is from a bot — cannot add.")
+        r = await context.bot.send_message(
+            chat_id=chat_id,
+            message_thread_id=thread_id,
+            text="That message is from a bot — cannot add."
+        )
         asyncio.create_task(_delete_after(context.bot, r.chat_id, r.message_id, delay=30))
         return
 
@@ -839,15 +904,20 @@ async def cmd_addmember(update: Update, context: ContextTypes.DEFAULT_TYPE):
     err = await tg_save(context.bot, data)
 
     if err:
-        r = await update.message.reply_text(
+        reply_text = (
             f"Storage error — could not save.\n\n"
             f"Error: {err}\n\n"
             f"Run /debug to check the storage channel setup."
         )
     elif already:
-        r = await update.message.reply_text(f"Updated: {u.full_name} (already registered)")
+        reply_text = f"Updated: {u.full_name} (already registered)"
     else:
-        r = await update.message.reply_text(f"Added: {u.full_name}")
+        reply_text = f"Added: {u.full_name}"
+    r = await context.bot.send_message(
+        chat_id=chat_id,
+        message_thread_id=thread_id,
+        text=reply_text
+    )
     asyncio.create_task(_delete_after(context.bot, r.chat_id, r.message_id, delay=30))
 
 
