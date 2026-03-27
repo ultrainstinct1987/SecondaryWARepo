@@ -244,8 +244,8 @@ async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
 
     prompt = await msg.reply_text(
-        f"📄 *{user.first_name}* uploaded a PDF.\n\nStep 1/5 — Select level:",
-        parse_mode='Markdown',
+        f"📄 <b>{user.first_name}</b> uploaded a PDF.\n\nStep 1/5 — Select level:",
+        parse_mode='HTML',
         reply_markup=kb_level()
     )
     context.user_data['collecting']['prompt_msg_id'] = prompt.message_id
@@ -334,7 +334,7 @@ async def on_paper_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-        await query.edit_message_text(f"✅ Renamed to `{filename}`", parse_mode='Markdown')
+        await query.edit_message_text(f"✅ Renamed to <code>{filename}</code>", parse_mode='HTML')
 
         # Store as pending approval
         data = await load_and_check(context.bot)
@@ -350,8 +350,8 @@ async def on_paper_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]])
         await context.bot.send_message(
             col['chat_id'],
-            f"📄 *{col['user_name']}* — `{filename}`\nWaiting for admin approval.",
-            parse_mode='Markdown',
+            f"📄 <b>{col['user_name']}</b> — <code>{filename}</code>\nWaiting for admin approval.",
+            parse_mode='HTML',
             reply_markup=keyboard
         )
 
@@ -394,17 +394,17 @@ async def on_approval(update: Update, context: ContextTypes.DEFAULT_TYPE):
         extra    = " — Requirement met! 🎉" if count >= REQUIRED_PDFS else f" — {REQUIRED_PDFS - count} more needed"
 
         await query.edit_message_text(
-            f"✅ *Approved* by {admin_name}\n"
-            f"👤 {name}: `{filename}`\n"
+            f"✅ <b>Approved</b> by {admin_name}\n"
+            f"👤 {name}: <code>{filename}</code>\n"
             f"{progress}{extra}",
-            parse_mode='Markdown'
+            parse_mode='HTML'
         )
     else:
         await query.edit_message_text(
-            f"❌ *Rejected* by {admin_name}\n"
-            f"👤 {name}: `{filename}`\n"
+            f"❌ <b>Rejected</b> by {admin_name}\n"
+            f"👤 {name}: <code>{filename}</code>\n"
             f"This PDF was not counted.",
-            parse_mode='Markdown'
+            parse_mode='HTML'
         )
 
     data['pending'] = pending
@@ -416,12 +416,12 @@ async def cmd_period(update: Update, context: ContextTypes.DEFAULT_TYPE):
     start, end = period_dates(data)
     days_left  = max(0, (end - datetime.now()).days)
     await update.message.reply_text(
-        f"📅 *Current Period*\n"
+        f"📅 <b>Current Period</b>\n"
         f"Start    : {fmt(start)}\n"
         f"End      : {fmt(end)}\n"
         f"Days left: {days_left}\n\n"
         f"Requirement: {REQUIRED_PDFS} PDFs per member",
-        parse_mode='Markdown'
+        parse_mode='HTML'
     )
 
 
@@ -441,18 +441,18 @@ async def cmd_mystatus(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     text = (
-        f"{icon} *Your Status*\n"
+        f"{icon} <b>Your Status</b>\n"
         f"({fmt(start)} – {fmt(end)})\n\n"
         f"Approved: {count}/{REQUIRED_PDFS} PDFs\n"
     )
     if pending_count:
         text += f"Pending approval: {pending_count} PDF(s)\n"
     if files:
-        text += "\nApproved files:\n" + "\n".join(f"  • {f}" for f in files)
+        text += "\nApproved files:\n" + "\n".join(f"  • <code>{f}</code>" for f in files)
     if count < REQUIRED_PDFS:
         text += f"\n\n{REQUIRED_PDFS - count} more approved PDF(s) needed before {fmt(end)}."
 
-    await update.message.reply_text(text, parse_mode='Markdown')
+    await update.message.reply_text(text, parse_mode='HTML')
 
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -481,14 +481,14 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     total = len(members)
     text  = (
-        f"📊 *Contribution Status*\n"
+        f"📊 <b>Contribution Status</b>\n"
         f"({fmt(start)} – {fmt(end)})\n\n"
         f"✅ Done ({len(done)}/{total}):\n"
         + ("\n".join(done) or "  (none yet)") + "\n\n"
         f"❌ Pending ({len(waiting)}/{total}):\n"
         + ("\n".join(waiting) or "  (all done!)")
     )
-    await update.message.reply_text(text, parse_mode='Markdown')
+    await update.message.reply_text(text, parse_mode='HTML')
 
 
 async def cmd_setstart(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -568,13 +568,13 @@ async def cmd_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    lines = [f"👥 *Registered Members ({len(members)})*\n"]
+    lines = [f"👥 <b>Registered Members ({len(members)})</b>\n"]
     for i, (uid, info) in enumerate(members.items(), 1):
         name  = info.get('name', 'Unknown')
         uname = f" @{info['username']}" if info.get('username') else ''
         lines.append(f"{i}. {name}{uname}")
 
-    await update.message.reply_text("\n".join(lines), parse_mode='Markdown')
+    await update.message.reply_text("\n".join(lines), parse_mode='HTML')
 
 
 async def cmd_debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -583,7 +583,7 @@ async def cmd_debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("This command is for admins only.")
         return
 
-    lines = [f"🔧 *Debug Info*\n"]
+    lines = [f"🔧 <b>Debug Info</b>\n"]
     lines.append(f"Storage channel ID: `{STORAGE_CHANNEL_ID}`")
 
     # Try to reach the storage channel
@@ -615,7 +615,7 @@ async def cmd_debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "then set STORAGE_CHANNEL_ID to that value."
         )
 
-    await update.message.reply_text("\n".join(lines), parse_mode='Markdown')
+    await update.message.reply_text("\n".join(lines), parse_mode='HTML')
 
 
 async def cmd_addmember(update: Update, context: ContextTypes.DEFAULT_TYPE):
