@@ -266,6 +266,27 @@ async def on_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await tg_save(context.bot, data)
 
 
+async def _start_next_queued(context: ContextTypes.DEFAULT_TYPE):
+    """Start the next queued file form if one exists."""
+    queue = context.user_data.get('queue', [])
+    if not queue:
+        return
+    nxt = queue.pop(0)
+    context.user_data['queue'] = queue
+    nxt['step'] = 'level'
+    context.user_data['collecting'] = nxt
+    remaining = len(queue)
+    note = f"\n<i>({remaining} more in queue)</i>" if remaining else ""
+    prompt = await context.bot.send_message(
+        nxt['chat_id'],
+        f"📄 <b>Next file ({nxt['user_name']}).</b>{note}\n\nStep 1/6 — Select level:",
+        message_thread_id=nxt.get('thread_id'),
+        parse_mode='HTML',
+        reply_markup=kb_level()
+    )
+    context.user_data['collecting']['prompt_msg_id'] = prompt.message_id
+
+
 async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
     if not msg or not msg.document:
@@ -285,19 +306,31 @@ async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data['members'][uid] = {'name': user.full_name, 'username': user.username or ''}
     await tg_save(context.bot, data)
 
-    # Start paper info collection — store state in user_data
     large = bool(doc.file_size and doc.file_size > 20 * 1024 * 1024)
-    context.user_data['collecting'] = {
+    entry = {
         'file_id':      doc.file_id,
         'chat_id':      msg.chat_id,
         'thread_id':    msg.message_thread_id,
         'orig_msg_id':  msg.message_id,
         'uid':          uid,
         'user_name':    user.full_name,
-        'step':         'level',
         'use_telethon': large,
     }
 
+    # If a form is already active, queue this file
+    if context.user_data.get('collecting'):
+        queue = context.user_data.setdefault('queue', [])
+        queue.append(entry)
+        position = len(queue)
+        await msg.reply_text(
+            f"📥 Added to queue (position {position}). "
+            f"This file will be processed after the current one.",
+        )
+        return
+
+    # Start paper info collection immediately
+    entry['step'] = 'level'
+    context.user_data['collecting'] = entry
     prompt = await msg.reply_text(
         f"📄 <b>{user.first_name}</b> uploaded a PDF.\n\nStep 1/6 — Select level:",
         parse_mode='HTML',
@@ -376,7 +409,6 @@ async def on_paper_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif field == 'confirm':
         if value == 'no':
             col = context.user_data.pop('collecting')
-            # Delete all intermediate messages
             for mid in [col.get('prompt_msg_id'), col.get('last_step_msg_id')]:
                 if mid:
                     try:
@@ -384,6 +416,7 @@ async def on_paper_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     except Exception:
                         pass
             await query.message.delete()
+            await _start_next_queued(context)
             return
 
         # Download, rename, re-upload, then send for approval
@@ -465,6 +498,8 @@ async def on_paper_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='HTML',
             reply_markup=keyboard
         )
+
+        await _start_next_queued(context)
 
 
 async def on_approval(update: Update, context: ContextTypes.DEFAULT_TYPE):
