@@ -112,6 +112,20 @@ def is_admin(user_id: int) -> bool:
 
 
 # ── Handlers ──────────────────────────────────────────────────────────────────
+async def on_any_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Silently register any user who sends a message in the group."""
+    msg  = update.message
+    user = msg.from_user if msg else None
+    if not user or user.is_bot:
+        return
+    data = await load_and_check(context.bot)
+    uid  = str(user.id)
+    if uid not in data['members']:
+        data['members'][uid] = {'name': user.full_name, 'username': user.username or ''}
+        await tg_save(context.bot, data)
+        logging.info(f"Auto-registered: {user.full_name} ({user.id})")
+
+
 async def on_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     result = update.chat_member
     if not result:
@@ -260,13 +274,75 @@ async def cmd_setstart(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def cmd_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """(Admin) Fetch all group admins and register them."""
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("This command is for admins only.")
+        return
+
+    chat = update.effective_chat
+    admins = await chat.get_administrators()
+    data   = await load_and_check(context.bot)
+
+    added = []
+    for member in admins:
+        u = member.user
+        if u.is_bot:
+            continue
+        uid = str(u.id)
+        if uid not in data['members']:
+            data['members'][uid] = {'name': u.full_name, 'username': u.username or ''}
+            added.append(u.full_name)
+
+    await tg_save(context.bot, data)
+
+    if added:
+        await update.message.reply_text(
+            f"Scanned admins. Added {len(added)} new member(s):\n" +
+            "\n".join(f"  • {n}" for n in added)
+        )
+    else:
+        await update.message.reply_text(
+            "Scanned admins — no new members found.\n\n"
+            "For non-admin members, ask them to send any message or type /mystatus in the group. "
+            "They'll be registered automatically."
+        )
+
+
+async def cmd_addmember(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """(Admin) Manually add a member by forwarding their message or by user ID.
+    Usage: /addmember @username Full Name
+       or: /addmember 123456789 Full Name
+    """
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("This command is for admins only.")
+        return
+
+    # If replying to a message, register that user
+    if update.message.reply_to_message:
+        u = update.message.reply_to_message.from_user
+        if u and not u.is_bot:
+            data = await load_and_check(context.bot)
+            data['members'][str(u.id)] = {'name': u.full_name, 'username': u.username or ''}
+            await tg_save(context.bot, data)
+            await update.message.reply_text(f"Added: {u.full_name}")
+            return
+
+    await update.message.reply_text(
+        "Reply to any message from the member you want to add, then use /addmember.\n"
+        "Example: reply to John's message and send /addmember"
+    )
+
+
 # ── Register commands (shows up when user types /) ────────────────────────────
 async def post_init(app: Application):
     await app.bot.set_my_commands([
-        BotCommand('mystatus',  'Check your own PDF contribution count'),
-        BotCommand('period',    'Show current period dates and deadline'),
-        BotCommand('status',    '(Admin) Show all members contribution status'),
-        BotCommand('setstart',  '(Admin) Start a new period — /setstart DD/MM/YYYY'),
+        BotCommand('mystatus',   'Check your own PDF contribution count'),
+        BotCommand('period',     'Show current period dates and deadline'),
+        BotCommand('status',     '(Admin) Show all members contribution status'),
+        BotCommand('scan',       '(Admin) Register all group admins'),
+        BotCommand('addmember',  '(Admin) Reply to a message to register that member'),
+        BotCommand('setstart',   '(Admin) Start a new period — /setstart DD/MM/YYYY'),
     ])
 
 
@@ -287,10 +363,13 @@ def main():
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
     app.add_handler(ChatMemberHandler(on_new_member, ChatMemberHandler.CHAT_MEMBER))
     app.add_handler(MessageHandler(filters.Document.ALL, on_document))
-    app.add_handler(CommandHandler('period',   cmd_period))
-    app.add_handler(CommandHandler('mystatus', cmd_mystatus))
-    app.add_handler(CommandHandler('status',   cmd_status))
-    app.add_handler(CommandHandler('setstart', cmd_setstart))
+    app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, on_any_message))
+    app.add_handler(CommandHandler('period',    cmd_period))
+    app.add_handler(CommandHandler('mystatus',  cmd_mystatus))
+    app.add_handler(CommandHandler('status',    cmd_status))
+    app.add_handler(CommandHandler('setstart',  cmd_setstart))
+    app.add_handler(CommandHandler('scan',      cmd_scan))
+    app.add_handler(CommandHandler('addmember', cmd_addmember))
     app.add_error_handler(on_error)
 
     print("Bot running. Press Ctrl+C to stop.")
