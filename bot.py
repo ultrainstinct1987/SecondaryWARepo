@@ -313,10 +313,10 @@ async def on_paper_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         filename = build_filename(col)
 
         try:
-            tg_file    = await context.bot.get_file(col['file_id'])
-            file_bytes = await tg_file.download_as_bytearray()
-            bio        = io.BytesIO(bytes(file_bytes))
-            bio.name   = filename
+            tg_file = await context.bot.get_file(col['file_id'])
+            bio = io.BytesIO()
+            await tg_file.download_to_memory(out=bio)
+            bio.seek(0)
 
             sent = await context.bot.send_document(
                 chat_id=col['chat_id'],
@@ -328,7 +328,7 @@ async def on_paper_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(f"❌ Failed to process file: {e}")
             return
 
-        # Try to delete the original untagged upload
+        # Only delete original AFTER confirming new file was sent
         try:
             await context.bot.delete_message(col['chat_id'], col['orig_msg_id'])
         except Exception:
