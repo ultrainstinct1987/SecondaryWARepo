@@ -20,7 +20,9 @@ Commands:
   /setstart DD/MM/YYYY  — (admin) start a new period
 """
 
+import io
 import os
+import re
 import json
 import logging
 from datetime import datetime
@@ -30,6 +32,59 @@ from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     ChatMemberHandler, CallbackQueryHandler, filters, ContextTypes
 )
+
+# ── Paper info collection ─────────────────────────────────────────────────────
+EXAM_TYPES = ['Prelim', 'SA1', 'SA2', 'CA1', 'CA2', 'EOY', 'MYE']
+YEARS      = ['2023', '2024', '2025', '2026']
+
+def build_filename(info: dict) -> str:
+    """Build standardised filename from collected paper info."""
+    level   = info['level'].replace(' ', '')           # Sec3
+    subject = info['subject'].replace('-','').replace(' ','')  # EMaths / AMaths
+    year    = info['year']
+    etype   = info['exam_type']
+    school  = re.sub(r'\s+', '', info['school'].lower())  # anglicanhigh
+    return f"{level}_{subject}_{year}_{etype}_{school}.pdf"
+
+def summary_text(info: dict) -> str:
+    return (
+        f"Level    : {info.get('level','—')}\n"
+        f"Subject  : {info.get('subject','—')}\n"
+        f"Exam type: {info.get('exam_type','—')}\n"
+        f"Year     : {info.get('year','—')}\n"
+        f"School   : {info.get('school','—')}"
+    )
+
+def kb_level():
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton('Sec 1', callback_data='pi:level:1'),
+        InlineKeyboardButton('Sec 2', callback_data='pi:level:2'),
+        InlineKeyboardButton('Sec 3', callback_data='pi:level:3'),
+        InlineKeyboardButton('Sec 4', callback_data='pi:level:4'),
+    ]])
+
+def kb_subject():
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton('E-Maths',  callback_data='pi:subject:E-Maths'),
+        InlineKeyboardButton('Add Maths', callback_data='pi:subject:Add Maths'),
+    ]])
+
+def kb_examtype():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(e, callback_data=f'pi:examtype:{e}') for e in EXAM_TYPES[:4]],
+        [InlineKeyboardButton(e, callback_data=f'pi:examtype:{e}') for e in EXAM_TYPES[4:]],
+    ])
+
+def kb_year():
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton(y, callback_data=f'pi:year:{y}') for y in YEARS
+    ]])
+
+def kb_confirm():
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton('✅ Confirm', callback_data='pi:confirm:yes'),
+        InlineKeyboardButton('❌ Cancel',  callback_data='pi:confirm:no'),
+    ]])
 
 logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -118,11 +173,27 @@ def is_admin(user_id: int) -> bool:
 
 # ── Handlers ──────────────────────────────────────────────────────────────────
 async def on_any_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Silently register any user who sends a message in the group."""
+    """Silently register members. Also captures school name during paper info collection."""
     msg  = update.message
     user = msg.from_user if msg else None
     if not user or user.is_bot:
         return
+
+    # Capture school name if this user is in the middle of filling in paper info
+    col = context.user_data.get('collecting')
+    if col and col.get('step') == 'school' and col['uid'] == str(user.id):
+        col['school'] = msg.text.strip()
+        filename = build_filename(col)
+        col['step'] = 'confirm'
+        await msg.reply_text(
+            f"Rename to:\n`{filename}`\n\n"
+            f"_{summary_text(col)}_\n\nConfirm?",
+            parse_mode='Markdown',
+            reply_markup=kb_confirm()
+        )
+        return
+
+    # Auto-register on first message
     data = await load_and_check(context.bot)
     uid  = str(user.id)
     if uid not in data['members']:
@@ -156,32 +227,133 @@ async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user or user.is_bot:
         return
 
+    # Register member
     data = await load_and_check(context.bot)
-
-    uid      = str(user.id)
-    filename = doc.file_name or f'file_{msg.message_id}.pdf'
-
-    # Register member if not already tracked
+    uid  = str(user.id)
     data['members'][uid] = {'name': user.full_name, 'username': user.username or ''}
-
-    # Store as pending — awaiting admin approval
-    data['pending'][str(msg.message_id)] = {
-        'user_id':  uid,
-        'filename': filename,
-    }
     await tg_save(context.bot, data)
 
-    # Send approval request with Approve / Reject buttons
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Approve", callback_data=f"approve:{uid}:{msg.message_id}"),
-        InlineKeyboardButton("❌ Reject",  callback_data=f"reject:{uid}:{msg.message_id}"),
-    ]])
-    await msg.reply_text(
-        f"📄 *{user.full_name}* uploaded `{filename}`\n"
-        f"Waiting for admin approval.",
+    # Start paper info collection — store state in user_data
+    context.user_data['collecting'] = {
+        'file_id':      doc.file_id,
+        'chat_id':      msg.chat_id,
+        'orig_msg_id':  msg.message_id,
+        'uid':          uid,
+        'user_name':    user.full_name,
+        'step':         'level',
+    }
+
+    prompt = await msg.reply_text(
+        f"📄 *{user.first_name}* uploaded a PDF.\n\nStep 1/5 — Select level:",
         parse_mode='Markdown',
-        reply_markup=keyboard
+        reply_markup=kb_level()
     )
+    context.user_data['collecting']['prompt_msg_id'] = prompt.message_id
+
+
+async def on_paper_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle the step-by-step paper info buttons."""
+    query = update.callback_query
+    col   = context.user_data.get('collecting')
+
+    # Only the uploader can fill in the form
+    if not col or col['uid'] != str(query.from_user.id):
+        await query.answer("Only the person who uploaded can fill this in.", show_alert=True)
+        return
+
+    await query.answer()
+
+    _, field, value = query.data.split(':', 2)
+
+    if field == 'level':
+        col['level'] = f'Sec {value}'
+        col['step']  = 'subject'
+        await query.edit_message_text(
+            f"Step 2/5 — Select subject:\n_(Level: Sec {value} ✅)_",
+            parse_mode='Markdown',
+            reply_markup=kb_subject()
+        )
+
+    elif field == 'subject':
+        col['subject'] = value
+        col['step']    = 'examtype'
+        await query.edit_message_text(
+            f"Step 3/5 — Select exam type:\n_{summary_text(col)}_",
+            parse_mode='Markdown',
+            reply_markup=kb_examtype()
+        )
+
+    elif field == 'examtype':
+        col['exam_type'] = value
+        col['step']      = 'year'
+        await query.edit_message_text(
+            f"Step 4/5 — Select year:\n_{summary_text(col)}_",
+            parse_mode='Markdown',
+            reply_markup=kb_year()
+        )
+
+    elif field == 'year':
+        col['year'] = value
+        col['step'] = 'school'
+        await query.edit_message_text(
+            f"Step 5/5 — Type the *school name* and send it:\n_{summary_text(col)}_",
+            parse_mode='Markdown'
+        )
+
+    elif field == 'confirm':
+        if value == 'no':
+            context.user_data.pop('collecting', None)
+            await query.edit_message_text("❌ Cancelled. The original PDF was not counted.")
+            return
+
+        # Download, rename, re-upload, then send for approval
+        await query.edit_message_text("⏳ Processing...")
+        col = context.user_data.pop('collecting')
+
+        filename = build_filename(col)
+
+        try:
+            tg_file    = await context.bot.get_file(col['file_id'])
+            file_bytes = await tg_file.download_as_bytearray()
+            bio        = io.BytesIO(bytes(file_bytes))
+            bio.name   = filename
+
+            sent = await context.bot.send_document(
+                chat_id=col['chat_id'],
+                document=bio,
+                filename=filename,
+                caption=f"📄 {filename}"
+            )
+        except Exception as e:
+            await query.edit_message_text(f"❌ Failed to process file: {e}")
+            return
+
+        # Try to delete the original untagged upload
+        try:
+            await context.bot.delete_message(col['chat_id'], col['orig_msg_id'])
+        except Exception:
+            pass
+
+        await query.edit_message_text(f"✅ Renamed to `{filename}`", parse_mode='Markdown')
+
+        # Store as pending approval
+        data = await load_and_check(context.bot)
+        data['pending'][str(sent.message_id)] = {
+            'user_id':  col['uid'],
+            'filename': filename,
+        }
+        await tg_save(context.bot, data)
+
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ Approve", callback_data=f"approve:{col['uid']}:{sent.message_id}"),
+            InlineKeyboardButton("❌ Reject",  callback_data=f"reject:{col['uid']}:{sent.message_id}"),
+        ]])
+        await context.bot.send_message(
+            col['chat_id'],
+            f"📄 *{col['user_name']}* — `{filename}`\nWaiting for admin approval.",
+            parse_mode='Markdown',
+            reply_markup=keyboard
+        )
 
 
 async def on_approval(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -517,8 +689,9 @@ def main():
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
     app.add_handler(ChatMemberHandler(on_new_member, ChatMemberHandler.CHAT_MEMBER))
     app.add_handler(MessageHandler(filters.Document.ALL, on_document))
-    app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, on_any_message))
-    app.add_handler(CallbackQueryHandler(on_approval, pattern=r'^(approve|reject):'))
+    app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS & ~filters.COMMAND, on_any_message))
+    app.add_handler(CallbackQueryHandler(on_paper_info, pattern=r'^pi:'))
+    app.add_handler(CallbackQueryHandler(on_approval,   pattern=r'^(approve|reject):'))
     app.add_handler(CommandHandler('period',    cmd_period))
     app.add_handler(CommandHandler('mystatus',  cmd_mystatus))
     app.add_handler(CommandHandler('status',    cmd_status))
