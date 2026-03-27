@@ -237,6 +237,7 @@ async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['collecting'] = {
         'file_id':      doc.file_id,
         'chat_id':      msg.chat_id,
+        'thread_id':    msg.message_thread_id,  # topic thread (None if no topics)
         'orig_msg_id':  msg.message_id,
         'uid':          uid,
         'user_name':    user.full_name,
@@ -320,6 +321,7 @@ async def on_paper_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             sent = await context.bot.send_document(
                 chat_id=col['chat_id'],
+                message_thread_id=col.get('thread_id'),
                 document=bio,
                 filename=filename,
                 caption=f"📄 {filename}"
@@ -351,6 +353,7 @@ async def on_paper_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(
             col['chat_id'],
             f"📄 <b>{col['user_name']}</b> — <code>{filename}</code>\nWaiting for admin approval.",
+            message_thread_id=col.get('thread_id'),
             parse_mode='HTML',
             reply_markup=keyboard
         )
