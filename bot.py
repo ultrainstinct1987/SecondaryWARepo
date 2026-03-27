@@ -1,14 +1,21 @@
 """
 Telegram Group Contribution Tracker Bot
 
-Tracks PDF contributions per 3-month period using a simple JSON file.
-Automatically resets when the period ends — no database needed.
+Stores all data inside Telegram itself — no files, no database, no 3rd party.
+Data is kept as a pinned message in a private storage channel.
+
+Setup:
+  1. Create a NEW private Telegram channel (e.g. "Bot Storage")
+  2. Add your bot to that channel and make it admin (allow: post, edit, pin)
+  3. Forward any message from that channel to @userinfobot to get the channel ID
+  4. Fill in BOT_TOKEN, ADMIN_IDS, and STORAGE_CHANNEL_ID below
+  5. python bot.py
 
 Commands:
-  /status       — (admin) show all members' contribution status
-  /mystatus     — show your own contribution count
-  /period       — show current period dates and deadline
-  /setstart DD/MM/YYYY  — (admin) manually start a new period
+  /status       — (admin) everyone's contribution status this period
+  /mystatus     — your own contribution count
+  /period       — current period dates and deadline
+  /setstart DD/MM/YYYY  — (admin) start a new period (resets contributions)
 """
 
 import os
@@ -28,60 +35,76 @@ logging.basicConfig(
 )
 
 # ── Config ────────────────────────────────────────────────────────────────────
-BOT_TOKEN     = os.getenv('BOT_TOKEN', '8745432625:AAEcTZSsGqvfmOlUGx5463qtamomRnVnoHk')
-ADMIN_IDS     = [int(x) for x in os.getenv('ADMIN_IDS', '411713323').split(',')]
-REQUIRED_PDFS = 2
-PERIOD_MONTHS = 3
-DATA_FILE     = 'data.json'
+BOT_TOKEN          = os.getenv('BOT_TOKEN',          '8745432625:AAEcTZSsGqvfmOlUGx5463qtamomRnVnoHk')
+ADMIN_IDS          = [int(x) for x in os.getenv('ADMIN_IDS', '411713323').split(',')]
+STORAGE_CHANNEL_ID = int(os.getenv('STORAGE_CHANNEL_ID', '0'))  # private channel ID
+REQUIRED_PDFS      = 2
+PERIOD_MONTHS      = 3
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-# ── JSON storage (replaces database) ─────────────────────────────────────────
-# data.json structure:
-# {
-#   "period_start": "2025-01-01",
-#   "members":       { "user_id": {"name": "...", "username": "..."} },
-#   "contributions": { "user_id": ["file1.pdf", "file2.pdf"] }
-# }
+# ── Telegram as storage ───────────────────────────────────────────────────────
+# Data is stored as a single JSON message pinned in the storage channel.
+# Load = read pinned message.  Save = edit pinned message.
 
-def load() -> dict:
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, 'r') as f:
-            return json.load(f)
-    # First run — start period from today
+def _default_data() -> dict:
     return {
         'period_start':  datetime.now().strftime('%Y-%m-%d'),
-        'members':       {},
-        'contributions': {}
+        'members':       {},   # { "user_id": {"name": "...", "username": "..."} }
+        'contributions': {}    # { "user_id": ["file1.pdf", "file2.pdf"] }
     }
 
 
-def save(data: dict):
-    with open(DATA_FILE, 'w') as f:
-        json.dump(data, f, indent=2)
+async def tg_load(bot) -> dict:
+    try:
+        chat = await bot.get_chat(STORAGE_CHANNEL_ID)
+        if chat.pinned_message and chat.pinned_message.text:
+            return json.loads(chat.pinned_message.text)
+    except Exception as e:
+        logging.warning(f"Load failed: {e}")
+    return _default_data()
 
 
-def check_and_reset(data: dict) -> dict:
-    """If the 3-month period has expired, reset contributions and start a new period."""
+async def tg_save(bot, data: dict):
+    text = json.dumps(data, ensure_ascii=False)
+    try:
+        chat = await bot.get_chat(STORAGE_CHANNEL_ID)
+        if chat.pinned_message:
+            await bot.edit_message_text(
+                chat_id=STORAGE_CHANNEL_ID,
+                message_id=chat.pinned_message.message_id,
+                text=text
+            )
+        else:
+            # First save — send and pin the message
+            msg = await bot.send_message(STORAGE_CHANNEL_ID, text)
+            await bot.pin_chat_message(STORAGE_CHANNEL_ID, msg.message_id,
+                                       disable_notification=True)
+    except Exception as e:
+        logging.error(f"Save failed: {e}")
+
+
+async def load_and_check(bot) -> dict:
+    """Load data and auto-reset if the period has expired."""
+    data = await tg_load(bot)
     start = datetime.strptime(data['period_start'], '%Y-%m-%d')
     end   = start + relativedelta(months=PERIOD_MONTHS)
     if datetime.now() >= end:
         data['period_start']  = end.strftime('%Y-%m-%d')
         data['contributions'] = {}
-        save(data)
-        logging.info(f"Period reset. New period started: {data['period_start']}")
+        await tg_save(bot, data)
+        logging.info(f"Period auto-reset. New start: {data['period_start']}")
     return data
-
-
-def period_dates(data: dict) -> tuple[datetime, datetime]:
-    start = datetime.strptime(data['period_start'], '%Y-%m-%d')
-    end   = start + relativedelta(months=PERIOD_MONTHS)
-    return start, end
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def fmt(dt: datetime) -> str:
     return dt.strftime('%d %b %Y')
+
+
+def period_dates(data: dict) -> tuple[datetime, datetime]:
+    start = datetime.strptime(data['period_start'], '%Y-%m-%d')
+    return start, start + relativedelta(months=PERIOD_MONTHS)
 
 
 def is_admin(user_id: int) -> bool:
@@ -97,9 +120,9 @@ async def on_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if u.is_bot or result.new_chat_member.status in ('left', 'kicked', 'banned'):
         return
 
-    data = check_and_reset(load())
+    data = await load_and_check(context.bot)
     data['members'][str(u.id)] = {'name': u.full_name, 'username': u.username or ''}
-    save(data)
+    await tg_save(context.bot, data)
 
 
 async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -115,24 +138,22 @@ async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user or user.is_bot:
         return
 
-    data = check_and_reset(load())
+    data = await load_and_check(context.bot)
 
-    # Register member automatically on first upload
     uid = str(user.id)
-    data['members'].setdefault(uid, {'name': user.full_name, 'username': user.username or ''})
     data['members'][uid] = {'name': user.full_name, 'username': user.username or ''}
+    data['contributions'].setdefault(uid, [])
 
-    # Record contribution
     filename = doc.file_name or f'file_{msg.message_id}.pdf'
-    data['contributions'].setdefault(uid, []).append(filename)
+    data['contributions'][uid].append(filename)
     count = len(data['contributions'][uid])
-    save(data)
+
+    await tg_save(context.bot, data)
 
     _, end = period_dates(data)
-
     if count == REQUIRED_PDFS:
         await msg.reply_text(
-            f"Thanks {user.first_name}! You've uploaded {count}/{REQUIRED_PDFS} PDFs. Requirement met! ✅"
+            f"Thanks {user.first_name}! {count}/{REQUIRED_PDFS} PDFs uploaded. Requirement met! ✅"
         )
     elif count < REQUIRED_PDFS:
         await msg.reply_text(
@@ -142,9 +163,9 @@ async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_period(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data = check_and_reset(load())
+    data = await load_and_check(context.bot)
     start, end = period_dates(data)
-    days_left = max(0, (end - datetime.now()).days)
+    days_left  = max(0, (end - datetime.now()).days)
     await update.message.reply_text(
         f"📅 *Current Period*\n"
         f"Start    : {fmt(start)}\n"
@@ -156,8 +177,8 @@ async def cmd_period(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_mystatus(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    data = check_and_reset(load())
+    user  = update.effective_user
+    data  = await load_and_check(context.bot)
     start, end = period_dates(data)
 
     uid   = str(user.id)
@@ -183,7 +204,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("This command is for admins only.")
         return
 
-    data = check_and_reset(load())
+    data = await load_and_check(context.bot)
     start, end = period_dates(data)
     members = data['members']
 
@@ -198,11 +219,10 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if count >= REQUIRED_PDFS:
             done.append(f"  ✅ {label}")
         else:
-            done_count = count
-            pending.append(f"  ❌ {label} ({done_count}/{REQUIRED_PDFS})")
+            pending.append(f"  ❌ {label} ({count}/{REQUIRED_PDFS})")
 
     total = len(members)
-    text = (
+    text  = (
         f"📊 *Contribution Status*\n"
         f"({fmt(start)} – {fmt(end)})\n\n"
         f"✅ Done ({len(done)}/{total}):\n"
@@ -219,19 +239,19 @@ async def cmd_setstart(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if not context.args:
-        await update.message.reply_text("Usage: /setstart DD/MM/YYYY\nExample: /setstart 01/01/2025")
+        await update.message.reply_text("Usage: /setstart DD/MM/YYYY\nExample: /setstart 01/04/2025")
         return
 
     try:
         dt = datetime.strptime(context.args[0], '%d/%m/%Y')
     except ValueError:
-        await update.message.reply_text("Invalid date. Use DD/MM/YYYY, e.g. 01/01/2025")
+        await update.message.reply_text("Invalid date. Use DD/MM/YYYY, e.g. 01/04/2025")
         return
 
-    data = load()
+    data = await tg_load(context.bot)
     data['period_start']  = dt.strftime('%Y-%m-%d')
-    data['contributions'] = {}   # reset contributions for the new period
-    save(data)
+    data['contributions'] = {}
+    await tg_save(context.bot, data)
 
     _, end = period_dates(data)
     await update.message.reply_text(
@@ -243,11 +263,13 @@ async def cmd_setstart(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
     if not BOT_TOKEN:
-        print("ERROR: Set BOT_TOKEN first.")
+        print("ERROR: Set BOT_TOKEN.")
+        return
+    if not STORAGE_CHANNEL_ID:
+        print("ERROR: Set STORAGE_CHANNEL_ID — create a private channel, add the bot as admin, get its ID.")
         return
 
     app = Application.builder().token(BOT_TOKEN).build()
-
     app.add_handler(ChatMemberHandler(on_new_member, ChatMemberHandler.CHAT_MEMBER))
     app.add_handler(MessageHandler(filters.Document.ALL, on_document))
     app.add_handler(CommandHandler('period',   cmd_period))
