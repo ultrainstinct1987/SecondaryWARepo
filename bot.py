@@ -23,7 +23,7 @@ import json
 import logging
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
-from telegram import Update
+from telegram import Update, BotCommand
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     ChatMemberHandler, filters, ContextTypes
@@ -260,6 +260,16 @@ async def cmd_setstart(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+# ── Register commands (shows up when user types /) ────────────────────────────
+async def post_init(app: Application):
+    await app.bot.set_my_commands([
+        BotCommand('mystatus',  'Check your own PDF contribution count'),
+        BotCommand('period',    'Show current period dates and deadline'),
+        BotCommand('status',    '(Admin) Show all members contribution status'),
+        BotCommand('setstart',  '(Admin) Start a new period — /setstart DD/MM/YYYY'),
+    ])
+
+
 # ── Error handler ─────────────────────────────────────────────────────────────
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
     logging.error(f"Update {update} caused error: {context.error}", exc_info=context.error)
@@ -274,7 +284,7 @@ def main():
         print("ERROR: Set STORAGE_CHANNEL_ID — create a private channel, add the bot as admin, get its ID.")
         return
 
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
     app.add_handler(ChatMemberHandler(on_new_member, ChatMemberHandler.CHAT_MEMBER))
     app.add_handler(MessageHandler(filters.Document.ALL, on_document))
     app.add_handler(CommandHandler('period',   cmd_period))
