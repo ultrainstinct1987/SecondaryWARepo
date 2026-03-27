@@ -39,7 +39,7 @@ logging.basicConfig(
 # ── Config ────────────────────────────────────────────────────────────────────
 BOT_TOKEN          = os.getenv('BOT_TOKEN',          '8745432625:AAEcTZSsGqvfmOlUGx5463qtamomRnVnoHk')
 ADMIN_IDS          = [int(x) for x in os.getenv('ADMIN_IDS', '411713323').split(',')]
-STORAGE_CHANNEL_ID = int(os.getenv('STORAGE_CHANNEL_ID', '411713323'))
+STORAGE_CHANNEL_ID = int(os.getenv('STORAGE_CHANNEL_ID', '0'))  # set this to your WAStorage channel ID
 REQUIRED_PDFS      = 2
 PERIOD_MONTHS      = 3
 # ─────────────────────────────────────────────────────────────────────────────
@@ -387,7 +387,10 @@ async def cmd_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
     members = data['members']
 
     if not members:
-        await update.message.reply_text("No members registered yet. Use /scan or ask members to send a message.")
+        await update.message.reply_text(
+            "No members registered yet.\n\n"
+            "Run /debug to check if storage is working, then use /scan to add admins."
+        )
         return
 
     lines = [f"👥 *Registered Members ({len(members)})*\n"]
@@ -395,6 +398,47 @@ async def cmd_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
         name  = info.get('name', 'Unknown')
         uname = f" @{info['username']}" if info.get('username') else ''
         lines.append(f"{i}. {name}{uname}")
+
+    await update.message.reply_text("\n".join(lines), parse_mode='Markdown')
+
+
+async def cmd_debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """(Admin) Show storage status and data summary for diagnosing issues."""
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("This command is for admins only.")
+        return
+
+    lines = [f"🔧 *Debug Info*\n"]
+    lines.append(f"Storage channel ID: `{STORAGE_CHANNEL_ID}`")
+
+    # Try to reach the storage channel
+    try:
+        chat = await context.bot.get_chat(STORAGE_CHANNEL_ID)
+        lines.append(f"Channel reachable: ✅ ({chat.title or chat.type})")
+
+        if chat.pinned_message:
+            raw = chat.pinned_message.text or ''
+            lines.append(f"Pinned message: ✅ ({len(raw)} chars)")
+            try:
+                data = json.loads(raw)
+                lines.append(f"Data valid JSON: ✅")
+                lines.append(f"Members stored: {len(data.get('members', {}))}")
+                lines.append(f"Contributions: {len(data.get('contributions', {}))}")
+                lines.append(f"Pending: {len(data.get('pending', {}))}")
+                lines.append(f"Period start: {data.get('period_start', '?')}")
+            except Exception as e:
+                lines.append(f"Data parse error: ❌ {e}")
+        else:
+            lines.append("Pinned message: ❌ (none — bot hasn't saved data yet)")
+            lines.append("Fix: make sure bot is admin in the storage channel and run /scan")
+
+    except Exception as e:
+        lines.append(f"Channel reachable: ❌\nError: {e}")
+        lines.append(
+            "\nFix: Create a private channel, add the bot as admin, "
+            "get its ID (forward a message to @userinfobot), "
+            "then set STORAGE_CHANNEL_ID to that value."
+        )
 
     await update.message.reply_text("\n".join(lines), parse_mode='Markdown')
 
@@ -425,6 +469,7 @@ async def post_init(app: Application):
         BotCommand('period',     'Show current period dates and deadline'),
         BotCommand('status',     '(Admin) Show all members contribution status'),
         BotCommand('members',    '(Admin) List all registered members'),
+        BotCommand('debug',      '(Admin) Check storage and data status'),
         BotCommand('scan',       '(Admin) Register all group admins'),
         BotCommand('addmember',  '(Admin) Reply to a message to register that member'),
         BotCommand('setstart',   '(Admin) Start a new period — /setstart DD/MM/YYYY'),
@@ -455,6 +500,7 @@ def main():
     app.add_handler(CommandHandler('status',    cmd_status))
     app.add_handler(CommandHandler('setstart',  cmd_setstart))
     app.add_handler(CommandHandler('members',   cmd_members))
+    app.add_handler(CommandHandler('debug',     cmd_debug))
     app.add_handler(CommandHandler('scan',      cmd_scan))
     app.add_handler(CommandHandler('addmember', cmd_addmember))
     app.add_error_handler(on_error)
