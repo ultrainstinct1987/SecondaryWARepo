@@ -186,9 +186,9 @@ async def on_any_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         filename = build_filename(col)
         col['step'] = 'confirm'
         await msg.reply_text(
-            f"Rename to:\n`{filename}`\n\n"
-            f"_{summary_text(col)}_\n\nConfirm?",
-            parse_mode='Markdown',
+            f"Rename to:\n<code>{filename}</code>\n\n"
+            f"<i>{summary_text(col)}</i>\n\nConfirm?",
+            parse_mode='HTML',
             reply_markup=kb_confirm()
         )
         return
@@ -269,8 +269,8 @@ async def on_paper_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         col['level'] = f'Sec {value}'
         col['step']  = 'subject'
         await query.edit_message_text(
-            f"Step 2/5 — Select subject:\n_(Level: Sec {value} ✅)_",
-            parse_mode='Markdown',
+            f"Step 2/5 — Select subject:\n<i>Level: Sec {value} ✅</i>",
+            parse_mode='HTML',
             reply_markup=kb_subject()
         )
 
@@ -278,8 +278,8 @@ async def on_paper_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         col['subject'] = value
         col['step']    = 'examtype'
         await query.edit_message_text(
-            f"Step 3/5 — Select exam type:\n_{summary_text(col)}_",
-            parse_mode='Markdown',
+            f"Step 3/5 — Select exam type:\n<i>{summary_text(col)}</i>",
+            parse_mode='HTML',
             reply_markup=kb_examtype()
         )
 
@@ -287,8 +287,8 @@ async def on_paper_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         col['exam_type'] = value
         col['step']      = 'year'
         await query.edit_message_text(
-            f"Step 4/5 — Select year:\n_{summary_text(col)}_",
-            parse_mode='Markdown',
+            f"Step 4/5 — Select year:\n<i>{summary_text(col)}</i>",
+            parse_mode='HTML',
             reply_markup=kb_year()
         )
 
@@ -296,8 +296,8 @@ async def on_paper_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         col['year'] = value
         col['step'] = 'school'
         await query.edit_message_text(
-            f"Step 5/5 — Type the *school name* and send it:\n_{summary_text(col)}_",
-            parse_mode='Markdown'
+            f"Step 5/5 — Type the <b>school name</b> and send it:\n<i>{summary_text(col)}</i>",
+            parse_mode='HTML'
         )
 
     elif field == 'confirm':
