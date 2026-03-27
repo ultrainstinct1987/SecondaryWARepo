@@ -26,6 +26,7 @@ import os
 import re
 import json
 import logging
+import fitz  # PyMuPDF
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from telethon import TelegramClient
@@ -35,6 +36,15 @@ from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     ChatMemberHandler, CallbackQueryHandler, filters, ContextTypes
 )
+
+# ── PDF compression ───────────────────────────────────────────────────────────
+def compress_pdf_bytes(pdf_bytes: bytes) -> bytes:
+    """Compress a PDF by removing redundant data and compressing streams."""
+    src = fitz.open(stream=pdf_bytes, filetype="pdf")
+    result = src.tobytes(deflate=True, garbage=4, clean=True)
+    src.close()
+    return result
+
 
 # ── Paper info collection ─────────────────────────────────────────────────────
 EXAM_TYPES = ['WA1', 'WA2', 'WA3', 'EOY', 'Practice']
@@ -385,6 +395,12 @@ async def on_paper_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 tg_file = await context.bot.get_file(col['file_id'])
                 await tg_file.download_to_memory(out=bio)
             bio.seek(0)
+
+            # Compress before re-uploading
+            compressed = await asyncio.get_event_loop().run_in_executor(
+                None, compress_pdf_bytes, bio.read()
+            )
+            bio = io.BytesIO(compressed)
 
             sent = await context.bot.send_document(
                 chat_id=col['chat_id'],
