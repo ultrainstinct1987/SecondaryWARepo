@@ -28,6 +28,8 @@ import json
 import logging
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
+from telethon import TelegramClient
+from telethon.sessions import StringSession
 from telegram import Update, BotCommand, BotCommandScopeAllChatAdministrators, BotCommandScopeChat, BotCommandScopeDefault, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
@@ -106,7 +108,16 @@ ADMIN_IDS          = [int(x) for x in os.getenv('ADMIN_IDS', '411713323').split(
 STORAGE_CHANNEL_ID = int(os.getenv('STORAGE_CHANNEL_ID', '-1003662706262'))
 REQUIRED_PDFS      = 2
 PERIOD_MONTHS      = 3
+
+# Telethon — needed to download files over 20 MB (Bot API limit)
+# Run get_session.py once locally, then set TELETHON_SESSION as an env var on Railway
+API_ID           = int(os.getenv('API_ID',   '39978206'))
+API_HASH         = os.getenv('API_HASH',     '5974a0eaf7d6464a7ebc72c567f1a802')
+TELETHON_SESSION = os.getenv('TELETHON_SESSION', '')
 # ─────────────────────────────────────────────────────────────────────────────
+
+_tl_session = StringSession(TELETHON_SESSION) if TELETHON_SESSION else 'session'
+tl_client   = TelegramClient(_tl_session, API_ID, API_HASH)
 
 
 # ── Telegram as storage ───────────────────────────────────────────────────────
@@ -253,14 +264,16 @@ async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await tg_save(context.bot, data)
 
     # Start paper info collection — store state in user_data
+    large = bool(doc.file_size and doc.file_size > 20 * 1024 * 1024)
     context.user_data['collecting'] = {
         'file_id':      doc.file_id,
         'chat_id':      msg.chat_id,
-        'thread_id':    msg.message_thread_id,  # topic thread (None if no topics)
+        'thread_id':    msg.message_thread_id,
         'orig_msg_id':  msg.message_id,
         'uid':          uid,
         'user_name':    user.full_name,
         'step':         'level',
+        'use_telethon': large,
     }
 
     prompt = await msg.reply_text(
@@ -358,9 +371,19 @@ async def on_paper_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         filename = build_filename(col)
 
         try:
-            tg_file = await context.bot.get_file(col['file_id'])
             bio = io.BytesIO()
-            await tg_file.download_to_memory(out=bio)
+            if col.get('use_telethon'):
+                if not tl_client.is_connected():
+                    await query.edit_message_text(
+                        "❌ This file is over 20 MB and the large-file client is not connected.\n"
+                        "Make sure TELETHON_SESSION is set correctly in Railway Variables."
+                    )
+                    return
+                tl_msg = await tl_client.get_messages(col['chat_id'], ids=col['orig_msg_id'])
+                await tl_client.download_media(tl_msg, bio)
+            else:
+                tg_file = await context.bot.get_file(col['file_id'])
+                await tg_file.download_to_memory(out=bio)
             bio.seek(0)
 
             sent = await context.bot.send_document(
@@ -724,6 +747,21 @@ async def post_init(app: Application):
         except Exception as e:
             logging.warning(f"Could not set admin commands for {admin_id}: {e}")
 
+    # Start Telethon for large file support
+    try:
+        await tl_client.start()
+        logging.info("Telethon client started — large file support enabled.")
+    except Exception as e:
+        logging.warning(f"Telethon failed to start: {e}. Files over 20 MB will not be supported.")
+
+
+async def post_shutdown(app: Application):
+    try:
+        await tl_client.disconnect()
+    except Exception:
+        pass
+
+
 # ── Error handler ─────────────────────────────────────────────────────────────
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
     logging.error(f"Update {update} caused error: {context.error}", exc_info=context.error)
@@ -738,7 +776,7 @@ def main():
         print("ERROR: Set STORAGE_CHANNEL_ID.")
         return
 
-    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
+    app = Application.builder().token(BOT_TOKEN).post_init(post_init).post_shutdown(post_shutdown).build()
     app.add_handler(ChatMemberHandler(on_new_member, ChatMemberHandler.CHAT_MEMBER))
     app.add_handler(MessageHandler(filters.Document.ALL, on_document))
     app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS & ~filters.COMMAND, on_any_message))
