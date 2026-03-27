@@ -39,10 +39,22 @@ from telegram.ext import (
 
 # ── PDF compression ───────────────────────────────────────────────────────────
 def compress_pdf_bytes(pdf_bytes: bytes) -> bytes:
-    """Compress a PDF by removing redundant data and compressing streams."""
+    """
+    Compress a scanned PDF by re-rendering each page at 150 DPI as JPEG.
+    Significantly reduces file size for image-heavy scanned PDFs.
+    """
     src = fitz.open(stream=pdf_bytes, filetype="pdf")
-    result = src.tobytes(deflate=True, garbage=4, clean=True)
+    out = fitz.open()
+
+    for page in src:
+        pix = page.get_pixmap(matrix=fitz.Matrix(150/72, 150/72))
+        img_bytes = pix.tobytes(output="jpeg", jpg_quality=75)
+        new_page = out.new_page(width=page.rect.width, height=page.rect.height)
+        new_page.insert_image(new_page.rect, stream=img_bytes)
+
+    result = out.tobytes(deflate=True, garbage=4)
     src.close()
+    out.close()
     return result
 
 
