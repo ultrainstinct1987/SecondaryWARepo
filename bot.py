@@ -39,7 +39,7 @@ logging.basicConfig(
 # ── Config ────────────────────────────────────────────────────────────────────
 BOT_TOKEN          = os.getenv('BOT_TOKEN',          '8745432625:AAEcTZSsGqvfmOlUGx5463qtamomRnVnoHk')
 ADMIN_IDS          = [int(x) for x in os.getenv('ADMIN_IDS', '411713323').split(',')]
-STORAGE_CHANNEL_ID = int(os.getenv('STORAGE_CHANNEL_ID', '0'))  # set this to your WAStorage channel ID
+STORAGE_CHANNEL_ID = int(os.getenv('STORAGE_CHANNEL_ID', '-1003662706262'))  # set this to your WAStorage channel ID
 REQUIRED_PDFS      = 2
 PERIOD_MONTHS      = 3
 # ─────────────────────────────────────────────────────────────────────────────
@@ -448,18 +448,33 @@ async def cmd_addmember(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("This command is for admins only.")
         return
 
-    if update.message.reply_to_message:
-        u = update.message.reply_to_message.from_user
-        if u and not u.is_bot:
-            data = await load_and_check(context.bot)
-            data['members'][str(u.id)] = {'name': u.full_name, 'username': u.username or ''}
-            await tg_save(context.bot, data)
-            await update.message.reply_text(f"Added: {u.full_name}")
-            return
+    replied = update.message.reply_to_message
 
-    await update.message.reply_text(
-        "Reply to any message from the member you want to add, then send /addmember."
-    )
+    if not replied:
+        await update.message.reply_text(
+            "How to use:\n"
+            "1. Long-press any message from the member\n"
+            "2. Tap Reply\n"
+            "3. Type /addmember manually (do not pick from the / menu)\n"
+            "4. Send"
+        )
+        return
+
+    u = replied.from_user
+    if not u or u.is_bot:
+        await update.message.reply_text("That message is from a bot — cannot add.")
+        return
+
+    data = await load_and_check(context.bot)
+    uid     = str(u.id)
+    already = uid in data['members']
+    data['members'][uid] = {'name': u.full_name, 'username': u.username or ''}
+    await tg_save(context.bot, data)
+
+    if already:
+        await update.message.reply_text(f"Updated: {u.full_name} (already registered)")
+    else:
+        await update.message.reply_text(f"Added: {u.full_name}")
 
 
 # ── Register commands ─────────────────────────────────────────────────────────
