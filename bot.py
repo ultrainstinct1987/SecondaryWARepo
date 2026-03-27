@@ -20,6 +20,7 @@ Commands:
   /setstart DD/MM/YYYY  — (admin) start a new period
 """
 
+import asyncio
 import io
 import os
 import re
@@ -27,7 +28,7 @@ import json
 import logging
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
-from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, BotCommand, BotCommandScopeAllChatAdministrators, BotCommandScopeChat, BotCommandScopeDefault, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     ChatMemberHandler, CallbackQueryHandler, filters, ContextTypes
@@ -39,17 +40,18 @@ YEARS      = ['2023', '2024', '2025', '2026']
 
 def build_filename(info: dict) -> str:
     """Build standardised filename from collected paper info."""
-    level   = info['level'].replace(' ', '')           # Sec3
-    subject = info['subject'].replace('-','').replace(' ','')  # EMaths / AMaths
-    year    = info['year']
+    level   = info['level']                            # S1 / S2 / S3 / S4
+    subject = info['subject']                          # EM / AM
+    grade   = info['grade']                            # G1 / G2 / G3
     etype   = info['exam_type']
-    school  = re.sub(r'\s+', '', info['school'].lower())  # anglicanhigh
-    return f"{level}_{subject}_{year}_{etype}_{school}.pdf"
+    school  = re.sub(r'\s+', '', info['school'].lower())
+    return f"{level}_{subject}_{grade}_{etype}_{school}.pdf"
 
 def summary_text(info: dict) -> str:
     return (
         f"Level    : {info.get('level','—')}\n"
         f"Subject  : {info.get('subject','—')}\n"
+        f"Grade    : {info.get('grade','—')}\n"
         f"Exam type: {info.get('exam_type','—')}\n"
         f"Year     : {info.get('year','—')}\n"
         f"School   : {info.get('school','—')}"
@@ -65,8 +67,15 @@ def kb_level():
 
 def kb_subject():
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton('E-Maths',  callback_data='pi:subject:E-Maths'),
-        InlineKeyboardButton('Add Maths', callback_data='pi:subject:Add Maths'),
+        InlineKeyboardButton('EM', callback_data='pi:subject:EM'),
+        InlineKeyboardButton('AM', callback_data='pi:subject:AM'),
+    ]])
+
+def kb_grade():
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton('G1', callback_data='pi:grade:G1'),
+        InlineKeyboardButton('G2', callback_data='pi:grade:G2'),
+        InlineKeyboardButton('G3', callback_data='pi:grade:G3'),
     ]])
 
 def kb_examtype():
@@ -94,7 +103,7 @@ logging.basicConfig(
 # ── Config ────────────────────────────────────────────────────────────────────
 BOT_TOKEN          = os.getenv('BOT_TOKEN',          '8745432625:AAEcTZSsGqvfmOlUGx5463qtamomRnVnoHk')
 ADMIN_IDS          = [int(x) for x in os.getenv('ADMIN_IDS', '411713323').split(',')]
-STORAGE_CHANNEL_ID = int(os.getenv('STORAGE_CHANNEL_ID', '-1003662706262'))  # set this to your WAStorage channel ID
+STORAGE_CHANNEL_ID = int(os.getenv('STORAGE_CHANNEL_ID', '-1003662706262'))
 REQUIRED_PDFS      = 2
 PERIOD_MONTHS      = 3
 # ─────────────────────────────────────────────────────────────────────────────
@@ -158,6 +167,14 @@ async def load_and_check(bot) -> dict:
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+async def _delete_after(bot, chat_id: int, message_id: int, delay: int = 60):
+    await asyncio.sleep(delay)
+    try:
+        await bot.delete_message(chat_id=chat_id, message_id=message_id)
+    except Exception:
+        pass
+
+
 def fmt(dt: datetime) -> str:
     return dt.strftime('%d %b %Y')
 
@@ -182,15 +199,17 @@ async def on_any_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Capture school name if this user is in the middle of filling in paper info
     col = context.user_data.get('collecting')
     if col and col.get('step') == 'school' and col['uid'] == str(user.id):
-        col['school'] = msg.text.strip()
+        col['school']      = msg.text.strip()
+        col['school_msg_id'] = msg.message_id
         filename = build_filename(col)
         col['step'] = 'confirm'
-        await msg.reply_text(
+        reply = await msg.reply_text(
             f"Rename to:\n<code>{filename}</code>\n\n"
             f"<i>{summary_text(col)}</i>\n\nConfirm?",
             parse_mode='HTML',
             reply_markup=kb_confirm()
         )
+        col['confirm_msg_id'] = reply.message_id
         return
 
     # Auto-register on first message
@@ -245,7 +264,7 @@ async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
 
     prompt = await msg.reply_text(
-        f"📄 <b>{user.first_name}</b> uploaded a PDF.\n\nStep 1/5 — Select level:",
+        f"📄 <b>{user.first_name}</b> uploaded a PDF.\n\nStep 1/6 — Select level:",
         parse_mode='HTML',
         reply_markup=kb_level()
     )
@@ -267,19 +286,28 @@ async def on_paper_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _, field, value = query.data.split(':', 2)
 
     if field == 'level':
-        col['level'] = f'Sec {value}'
+        col['level'] = f'S{value}'
         col['step']  = 'subject'
         await query.edit_message_text(
-            f"Step 2/5 — Select subject:\n<i>Level: Sec {value} ✅</i>",
+            f"Step 2/6 — Select subject:\n<i>Level: S{value} ✅</i>",
             parse_mode='HTML',
             reply_markup=kb_subject()
         )
 
     elif field == 'subject':
         col['subject'] = value
-        col['step']    = 'examtype'
+        col['step']    = 'grade'
         await query.edit_message_text(
-            f"Step 3/5 — Select exam type:\n<i>{summary_text(col)}</i>",
+            f"Step 3/6 — Select grade:\n<i>{summary_text(col)}</i>",
+            parse_mode='HTML',
+            reply_markup=kb_grade()
+        )
+
+    elif field == 'grade':
+        col['grade'] = value
+        col['step']  = 'examtype'
+        await query.edit_message_text(
+            f"Step 4/6 — Select exam type:\n<i>{summary_text(col)}</i>",
             parse_mode='HTML',
             reply_markup=kb_examtype()
         )
@@ -288,7 +316,7 @@ async def on_paper_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         col['exam_type'] = value
         col['step']      = 'year'
         await query.edit_message_text(
-            f"Step 4/5 — Select year:\n<i>{summary_text(col)}</i>",
+            f"Step 5/6 — Select year:\n<i>{summary_text(col)}</i>",
             parse_mode='HTML',
             reply_markup=kb_year()
         )
@@ -300,7 +328,7 @@ async def on_paper_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"<i>{summary_text(col)}</i>",
             parse_mode='HTML'
         )
-        await context.bot.send_message(
+        last_step_msg = await context.bot.send_message(
             col['chat_id'],
             "⬇️ <b>Last step!</b>\n\n"
             "Type the <b>school name</b> in the chat and send it.\n"
@@ -308,11 +336,19 @@ async def on_paper_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
             message_thread_id=col.get('thread_id'),
             parse_mode='HTML'
         )
+        col['last_step_msg_id'] = last_step_msg.message_id
 
     elif field == 'confirm':
         if value == 'no':
-            context.user_data.pop('collecting', None)
-            await query.edit_message_text("❌ Cancelled. The original PDF was not counted.")
+            col = context.user_data.pop('collecting')
+            # Delete all intermediate messages
+            for mid in [col.get('prompt_msg_id'), col.get('last_step_msg_id')]:
+                if mid:
+                    try:
+                        await context.bot.delete_message(col['chat_id'], mid)
+                    except Exception:
+                        pass
+            await query.message.delete()
             return
 
         # Download, rename, re-upload, then send for approval
@@ -332,19 +368,25 @@ async def on_paper_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 message_thread_id=col.get('thread_id'),
                 document=bio,
                 filename=filename,
-                caption=f"📄 {filename}"
+                caption=f"📄 {filename}\nUploaded by: {col['user_name']}"
             )
         except Exception as e:
             await query.edit_message_text(f"❌ Failed to process file: {e}")
             return
 
-        # Only delete original AFTER confirming new file was sent
-        try:
-            await context.bot.delete_message(col['chat_id'], col['orig_msg_id'])
-        except Exception:
-            pass
-
-        await query.edit_message_text(f"✅ Renamed to <code>{filename}</code>", parse_mode='HTML')
+        # Delete original PDF and all intermediate bot/user messages
+        for mid in [
+            col.get('orig_msg_id'),
+            col.get('prompt_msg_id'),
+            col.get('last_step_msg_id'),
+            col.get('school_msg_id'),
+            col.get('confirm_msg_id'),
+        ]:
+            if mid:
+                try:
+                    await context.bot.delete_message(col['chat_id'], mid)
+                except Exception:
+                    pass
 
         # Store as pending approval
         data = await load_and_check(context.bot)
@@ -398,25 +440,8 @@ async def on_approval(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if action == 'approve':
         data['contributions'].setdefault(uid, []).append(filename)
-        count = len(data['contributions'][uid])
-        _, end = period_dates(data)
 
-        progress = f"{count}/{REQUIRED_PDFS} PDFs this period"
-        extra    = " — Requirement met! 🎉" if count >= REQUIRED_PDFS else f" — {REQUIRED_PDFS - count} more needed"
-
-        await query.edit_message_text(
-            f"✅ <b>Approved</b> by {admin_name}\n"
-            f"👤 {name}: <code>{filename}</code>\n"
-            f"{progress}{extra}",
-            parse_mode='HTML'
-        )
-    else:
-        await query.edit_message_text(
-            f"❌ <b>Rejected</b> by {admin_name}\n"
-            f"👤 {name}: <code>{filename}</code>\n"
-            f"This PDF was not counted.",
-            parse_mode='HTML'
-        )
+    await query.message.delete()
 
     data['pending'] = pending
     await tg_save(context.bot, data)
@@ -426,7 +451,7 @@ async def cmd_period(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = await load_and_check(context.bot)
     start, end = period_dates(data)
     days_left  = max(0, (end - datetime.now()).days)
-    await update.message.reply_text(
+    reply = await update.message.reply_text(
         f"📅 <b>Current Period</b>\n"
         f"Start    : {fmt(start)}\n"
         f"End      : {fmt(end)}\n"
@@ -434,6 +459,7 @@ async def cmd_period(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Requirement: {REQUIRED_PDFS} PDFs per member",
         parse_mode='HTML'
     )
+    asyncio.create_task(_delete_after(context.bot, reply.chat_id, reply.message_id))
 
 
 async def cmd_mystatus(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -463,7 +489,8 @@ async def cmd_mystatus(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if count < REQUIRED_PDFS:
         text += f"\n\n{REQUIRED_PDFS - count} more approved PDF(s) needed before {fmt(end)}."
 
-    await update.message.reply_text(text, parse_mode='HTML')
+    reply = await update.message.reply_text(text, parse_mode='HTML')
+    asyncio.create_task(_delete_after(context.bot, reply.chat_id, reply.message_id))
 
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -671,17 +698,31 @@ async def cmd_addmember(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ── Register commands ─────────────────────────────────────────────────────────
 async def post_init(app: Application):
-    await app.bot.set_my_commands([
-        BotCommand('mystatus',   'Check your own contribution status'),
-        BotCommand('period',     'Show current period dates and deadline'),
-        BotCommand('status',     '(Admin) Show all members contribution status'),
-        BotCommand('members',    '(Admin) List all registered members'),
-        BotCommand('debug',      '(Admin) Check storage and data status'),
-        BotCommand('scan',       '(Admin) Register all group admins'),
-        BotCommand('addmember',  '(Admin) Reply to a message to register that member'),
-        BotCommand('setstart',   '(Admin) Start a new period — /setstart DD/MM/YYYY'),
-    ])
+    user_commands = [
+        BotCommand('mystatus', 'Check your own contribution status'),
+        BotCommand('period',   'Show current period dates and deadline'),
+    ]
+    admin_commands = user_commands + [
+        BotCommand('status',    'Show all members contribution status'),
+        BotCommand('members',   'List all registered members'),
+        BotCommand('debug',     'Check storage and data status'),
+        BotCommand('scan',      'Register all group admins'),
+        BotCommand('addmember', 'Reply to a message to register that member'),
+        BotCommand('setstart',  'Start a new period — /setstart DD/MM/YYYY'),
+    ]
 
+    # Show only user commands to everyone by default
+    await app.bot.set_my_commands(user_commands, scope=BotCommandScopeDefault())
+
+    # Show full command list to group admins in all group chats
+    await app.bot.set_my_commands(admin_commands, scope=BotCommandScopeAllChatAdministrators())
+
+    # Show full command list to each admin in their private chat with the bot
+    for admin_id in ADMIN_IDS:
+        try:
+            await app.bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=admin_id))
+        except Exception as e:
+            logging.warning(f"Could not set admin commands for {admin_id}: {e}")
 
 # ── Error handler ─────────────────────────────────────────────────────────────
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
