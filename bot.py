@@ -414,11 +414,12 @@ async def on_paper_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.edit_message_text("❌ Downloaded file is empty. Please re-upload and try again.")
                 return
 
-            # Compress before re-uploading
-            compressed = await asyncio.get_event_loop().run_in_executor(
-                None, compress_pdf_bytes, bio.read()
-            )
-            bio = io.BytesIO(compressed)
+            # Compress only large files (over 20 MB, downloaded via Telethon)
+            if col.get('use_telethon'):
+                compressed = await asyncio.get_event_loop().run_in_executor(
+                    None, compress_pdf_bytes, bio.read()
+                )
+                bio = io.BytesIO(compressed)
 
             sent = await context.bot.send_document(
                 chat_id=col['chat_id'],
@@ -614,6 +615,48 @@ async def cmd_setstart(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def cmd_resetperiod(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Reset all contributions and pending approvals, keeping the current period dates."""
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("This command is for admins only.")
+        return
+
+    data = await tg_load(context.bot)
+    start, end = period_dates(data)
+    data['contributions'] = {}
+    data['pending']       = {}
+    await tg_save(context.bot, data)
+
+    await update.message.reply_text(
+        f"🗑 <b>Period reset.</b>\n"
+        f"All contributions and pending approvals cleared.\n"
+        f"Period dates unchanged: {fmt(start)} → {fmt(end)}",
+        parse_mode='HTML'
+    )
+
+
+async def cmd_newperiod(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start a new period from today, resetting all contributions."""
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("This command is for admins only.")
+        return
+
+    today = datetime.now()
+    data  = await tg_load(context.bot)
+    data['period_start']  = today.strftime('%Y-%m-%d')
+    data['contributions'] = {}
+    data['pending']       = {}
+    await tg_save(context.bot, data)
+
+    _, end = period_dates(data)
+    await update.message.reply_text(
+        f"🆕 <b>New period started.</b>\n"
+        f"{fmt(today)} → {fmt(end)}\n"
+        f"All contributions and pending approvals have been reset.",
+        parse_mode='HTML'
+    )
+
+
 async def cmd_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("This command is for admins only.")
@@ -765,7 +808,9 @@ async def post_init(app: Application):
         BotCommand('debug',     'Check storage and data status'),
         BotCommand('scan',      'Register all group admins'),
         BotCommand('addmember', 'Reply to a message to register that member'),
-        BotCommand('setstart',  'Start a new period — /setstart DD/MM/YYYY'),
+        BotCommand('setstart',     'Start a new period — /setstart DD/MM/YYYY'),
+        BotCommand('newperiod',    'Start a new period from today and reset contributions'),
+        BotCommand('resetperiod',  'Reset contributions only, keep current period dates'),
     ]
 
     # Show only user commands to everyone by default
@@ -822,8 +867,10 @@ def main():
     app.add_handler(CommandHandler('setstart',  cmd_setstart))
     app.add_handler(CommandHandler('members',   cmd_members))
     app.add_handler(CommandHandler('debug',     cmd_debug))
-    app.add_handler(CommandHandler('scan',      cmd_scan))
-    app.add_handler(CommandHandler('addmember', cmd_addmember))
+    app.add_handler(CommandHandler('scan',        cmd_scan))
+    app.add_handler(CommandHandler('addmember',   cmd_addmember))
+    app.add_handler(CommandHandler('resetperiod', cmd_resetperiod))
+    app.add_handler(CommandHandler('newperiod',   cmd_newperiod))
     app.add_error_handler(on_error)
 
     print("Bot running. Press Ctrl+C to stop.")
