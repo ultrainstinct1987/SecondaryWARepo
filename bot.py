@@ -221,6 +221,14 @@ def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
 
 
+async def _delete_cmd(update: Update):
+    """Silently delete the command message."""
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+
+
 # ── Handlers ──────────────────────────────────────────────────────────────────
 async def on_any_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Silently register members. Also captures school name during paper info collection."""
@@ -541,6 +549,7 @@ async def on_approval(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_period(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _delete_cmd(update)
     data = await load_and_check(context.bot)
     start, end = period_dates(data)
     days_left  = max(0, (end - datetime.now()).days)
@@ -556,6 +565,7 @@ async def cmd_period(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_mystatus(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _delete_cmd(update)
     user  = update.effective_user
     data  = await load_and_check(context.bot)
     start, end = period_dates(data)
@@ -587,8 +597,8 @@ async def cmd_mystatus(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _delete_cmd(update)
     if not is_admin(update.effective_user.id):
-        await update.message.reply_text("This command is for admins only.")
         return
 
     data = await load_and_check(context.bot)
@@ -623,8 +633,8 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_setstart(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _delete_cmd(update)
     if not is_admin(update.effective_user.id):
-        await update.message.reply_text("This command is for admins only.")
         return
 
     if not context.args:
@@ -651,9 +661,8 @@ async def cmd_setstart(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_resetperiod(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Reset all contributions and pending approvals, keeping the current period dates."""
+    await _delete_cmd(update)
     if not is_admin(update.effective_user.id):
-        await update.message.reply_text("This command is for admins only.")
         return
 
     data = await tg_load(context.bot)
@@ -671,9 +680,8 @@ async def cmd_resetperiod(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_newperiod(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start a new period from today, resetting all contributions."""
+    await _delete_cmd(update)
     if not is_admin(update.effective_user.id):
-        await update.message.reply_text("This command is for admins only.")
         return
 
     today = datetime.now()
@@ -693,8 +701,8 @@ async def cmd_newperiod(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _delete_cmd(update)
     if not is_admin(update.effective_user.id):
-        await update.message.reply_text("This command is for admins only.")
         return
 
     chat   = update.effective_chat
@@ -726,9 +734,8 @@ async def cmd_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show all registered members."""
+    await _delete_cmd(update)
     if not is_admin(update.effective_user.id):
-        await update.message.reply_text("This command is for admins only.")
         return
 
     data = await load_and_check(context.bot)
@@ -751,9 +758,8 @@ async def cmd_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """(Admin) Show storage status and data summary for diagnosing issues."""
+    await _delete_cmd(update)
     if not is_admin(update.effective_user.id):
-        await update.message.reply_text("This command is for admins only.")
         return
 
     lines = [f"🔧 <b>Debug Info</b>\n"]
@@ -792,8 +798,8 @@ async def cmd_debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_addmember(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _delete_cmd(update)
     if not is_admin(update.effective_user.id):
-        await update.message.reply_text("This command is for admins only.")
         return
 
     replied = update.message.reply_to_message
