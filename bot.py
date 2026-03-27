@@ -377,6 +377,28 @@ async def cmd_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+async def cmd_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show all registered members."""
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("This command is for admins only.")
+        return
+
+    data = await load_and_check(context.bot)
+    members = data['members']
+
+    if not members:
+        await update.message.reply_text("No members registered yet. Use /scan or ask members to send a message.")
+        return
+
+    lines = [f"👥 *Registered Members ({len(members)})*\n"]
+    for i, (uid, info) in enumerate(members.items(), 1):
+        name  = info.get('name', 'Unknown')
+        uname = f" @{info['username']}" if info.get('username') else ''
+        lines.append(f"{i}. {name}{uname}")
+
+    await update.message.reply_text("\n".join(lines), parse_mode='Markdown')
+
+
 async def cmd_addmember(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("This command is for admins only.")
@@ -402,6 +424,7 @@ async def post_init(app: Application):
         BotCommand('mystatus',   'Check your own contribution status'),
         BotCommand('period',     'Show current period dates and deadline'),
         BotCommand('status',     '(Admin) Show all members contribution status'),
+        BotCommand('members',    '(Admin) List all registered members'),
         BotCommand('scan',       '(Admin) Register all group admins'),
         BotCommand('addmember',  '(Admin) Reply to a message to register that member'),
         BotCommand('setstart',   '(Admin) Start a new period — /setstart DD/MM/YYYY'),
@@ -431,6 +454,7 @@ def main():
     app.add_handler(CommandHandler('mystatus',  cmd_mystatus))
     app.add_handler(CommandHandler('status',    cmd_status))
     app.add_handler(CommandHandler('setstart',  cmd_setstart))
+    app.add_handler(CommandHandler('members',   cmd_members))
     app.add_handler(CommandHandler('scan',      cmd_scan))
     app.add_handler(CommandHandler('addmember', cmd_addmember))
     app.add_error_handler(on_error)
