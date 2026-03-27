@@ -37,7 +37,7 @@ logging.basicConfig(
 # ── Config ────────────────────────────────────────────────────────────────────
 BOT_TOKEN          = os.getenv('BOT_TOKEN',          '8745432625:AAEcTZSsGqvfmOlUGx5463qtamomRnVnoHk')
 ADMIN_IDS          = [int(x) for x in os.getenv('ADMIN_IDS', '411713323').split(',')]
-STORAGE_CHANNEL_ID = int(os.getenv('STORAGE_CHANNEL_ID', '0'))  # private channel ID
+STORAGE_CHANNEL_ID = int(os.getenv('STORAGE_CHANNEL_ID', '411713323'))  # private channel ID
 REQUIRED_PDFS      = 2
 PERIOD_MONTHS      = 3
 # ─────────────────────────────────────────────────────────────────────────────
@@ -260,6 +260,11 @@ async def cmd_setstart(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+# ── Error handler ─────────────────────────────────────────────────────────────
+async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
+    logging.error(f"Update {update} caused error: {context.error}", exc_info=context.error)
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
     if not BOT_TOKEN:
@@ -276,6 +281,7 @@ def main():
     app.add_handler(CommandHandler('mystatus', cmd_mystatus))
     app.add_handler(CommandHandler('status',   cmd_status))
     app.add_handler(CommandHandler('setstart', cmd_setstart))
+    app.add_error_handler(on_error)
 
     print("Bot running. Press Ctrl+C to stop.")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
