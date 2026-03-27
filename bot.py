@@ -34,7 +34,7 @@ from telegram.ext import (
 )
 
 # ── Paper info collection ─────────────────────────────────────────────────────
-EXAM_TYPES = ['Prelim', 'SA1', 'SA2', 'CA1', 'CA2', 'EOY', 'MYE']
+EXAM_TYPES = ['WA1', 'WA2', 'WA3', 'EOY', 'Practice']
 YEARS      = ['2023', '2024', '2025', '2026']
 
 def build_filename(info: dict) -> str:
@@ -71,8 +71,8 @@ def kb_subject():
 
 def kb_examtype():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(e, callback_data=f'pi:examtype:{e}') for e in EXAM_TYPES[:4]],
-        [InlineKeyboardButton(e, callback_data=f'pi:examtype:{e}') for e in EXAM_TYPES[4:]],
+        [InlineKeyboardButton(e, callback_data=f'pi:examtype:{e}') for e in EXAM_TYPES[:3]],
+        [InlineKeyboardButton(e, callback_data=f'pi:examtype:{e}') for e in EXAM_TYPES[3:]],
     ])
 
 def kb_year():
