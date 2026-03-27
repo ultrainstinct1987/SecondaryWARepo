@@ -64,12 +64,13 @@ YEARS      = ['2023', '2024', '2025', '2026']
 
 def build_filename(info: dict) -> str:
     """Build standardised filename from collected paper info."""
+    year    = info['year']
     level   = info['level']                            # S1 / S2 / S3 / S4
     subject = info['subject']                          # EM / AM
     grade   = info['grade']                            # G1 / G2 / G3
     etype   = info['exam_type']
     school  = re.sub(r'\s+', '', info['school'].lower())
-    return f"{level}_{subject}_{grade}_{etype}_{school}.pdf"
+    return f"{year}_{level}_{subject}_{grade}_{etype}_{school}.pdf"
 
 def summary_text(info: dict) -> str:
     return (
