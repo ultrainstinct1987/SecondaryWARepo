@@ -402,11 +402,17 @@ async def on_paper_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
                     return
                 tl_msg = await tl_client.get_messages(col['chat_id'], ids=col['orig_msg_id'])
+                if tl_msg is None:
+                    await query.edit_message_text("❌ Could not find the original message. Please re-upload the file.")
+                    return
                 await tl_client.download_media(tl_msg, bio)
             else:
                 tg_file = await context.bot.get_file(col['file_id'])
                 await tg_file.download_to_memory(out=bio)
             bio.seek(0)
+            if bio.getbuffer().nbytes == 0:
+                await query.edit_message_text("❌ Downloaded file is empty. Please re-upload and try again.")
+                return
 
             # Compress before re-uploading
             compressed = await asyncio.get_event_loop().run_in_executor(
