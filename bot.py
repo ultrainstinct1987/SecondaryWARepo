@@ -82,43 +82,55 @@ def summary_text(info: dict) -> str:
         f"School   : {info.get('school','—')}"
     )
 
-def kb_level():
+def kb_mode():
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton('Sec 1', callback_data='pi:level:1'),
-        InlineKeyboardButton('Sec 2', callback_data='pi:level:2'),
-        InlineKeyboardButton('Sec 3', callback_data='pi:level:3'),
-        InlineKeyboardButton('Sec 4', callback_data='pi:level:4'),
+        InlineKeyboardButton('📋 Fill in form',    callback_data='pi:mode:form'),
+        InlineKeyboardButton('✏️ Rename manually', callback_data='pi:mode:manual'),
     ]])
+
+def kb_level():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton('Sec 1', callback_data='pi:level:1'),
+         InlineKeyboardButton('Sec 2', callback_data='pi:level:2'),
+         InlineKeyboardButton('Sec 3', callback_data='pi:level:3'),
+         InlineKeyboardButton('Sec 4', callback_data='pi:level:4')],
+        [InlineKeyboardButton('⬅️ Back', callback_data='pi:back:mode')],
+    ])
 
 def kb_subject():
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton('EM', callback_data='pi:subject:EM'),
-        InlineKeyboardButton('AM', callback_data='pi:subject:AM'),
-    ]])
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton('EM', callback_data='pi:subject:EM'),
+         InlineKeyboardButton('AM', callback_data='pi:subject:AM')],
+        [InlineKeyboardButton('⬅️ Back', callback_data='pi:back:level')],
+    ])
 
 def kb_grade():
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton('G1', callback_data='pi:grade:G1'),
-        InlineKeyboardButton('G2', callback_data='pi:grade:G2'),
-        InlineKeyboardButton('G3', callback_data='pi:grade:G3'),
-    ]])
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton('G1', callback_data='pi:grade:G1'),
+         InlineKeyboardButton('G2', callback_data='pi:grade:G2'),
+         InlineKeyboardButton('G3', callback_data='pi:grade:G3')],
+        [InlineKeyboardButton('⬅️ Back', callback_data='pi:back:subject')],
+    ])
 
 def kb_examtype():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(e, callback_data=f'pi:examtype:{e}') for e in EXAM_TYPES[:3]],
         [InlineKeyboardButton(e, callback_data=f'pi:examtype:{e}') for e in EXAM_TYPES[3:]],
+        [InlineKeyboardButton('⬅️ Back', callback_data='pi:back:grade')],
     ])
 
 def kb_year():
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton(y, callback_data=f'pi:year:{y}') for y in YEARS
-    ]])
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(y, callback_data=f'pi:year:{y}') for y in YEARS],
+        [InlineKeyboardButton('⬅️ Back', callback_data='pi:back:examtype')],
+    ])
 
 def kb_confirm():
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton('✅ Confirm', callback_data='pi:confirm:yes'),
-        InlineKeyboardButton('❌ Cancel',  callback_data='pi:confirm:no'),
-    ]])
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton('✅ Confirm', callback_data='pi:confirm:yes'),
+         InlineKeyboardButton('❌ Cancel',  callback_data='pi:confirm:no')],
+        [InlineKeyboardButton('⬅️ Back',    callback_data='pi:back:school')],
+    ])
 
 logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -238,21 +250,37 @@ async def on_any_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user or user.is_bot:
         return
 
-    # Capture school name if this user is in the middle of filling in paper info
+    # Capture text input during paper info collection
     col = context.user_data.get('collecting')
-    if col and col.get('step') == 'school' and col['uid'] == str(user.id):
-        col['school']      = msg.text.strip()
-        col['school_msg_id'] = msg.message_id
-        filename = build_filename(col)
-        col['step'] = 'confirm'
-        reply = await msg.reply_text(
-            f"Rename to:\n<code>{filename}</code>\n\n"
-            f"<i>{summary_text(col)}</i>\n\nConfirm?",
-            parse_mode='HTML',
-            reply_markup=kb_confirm()
-        )
-        col['confirm_msg_id'] = reply.message_id
-        return
+    if col and col['uid'] == str(user.id):
+        if col.get('step') == 'school':
+            col['school']        = msg.text.strip()
+            col['school_msg_id'] = msg.message_id
+            filename = build_filename(col)
+            col['step'] = 'confirm'
+            reply = await msg.reply_text(
+                f"Rename to:\n<code>{filename}</code>\n\n"
+                f"<i>{summary_text(col)}</i>\n\nConfirm?",
+                parse_mode='HTML',
+                reply_markup=kb_confirm()
+            )
+            col['confirm_msg_id'] = reply.message_id
+            return
+
+        if col.get('step') == 'manual_name':
+            name = msg.text.strip()
+            if not name.lower().endswith('.pdf'):
+                name += '.pdf'
+            col['manual_filename'] = name
+            col['school_msg_id']   = msg.message_id  # reuse for cleanup
+            col['step'] = 'confirm'
+            reply = await msg.reply_text(
+                f"Rename to:\n<code>{name}</code>\n\nConfirm?",
+                parse_mode='HTML',
+                reply_markup=kb_confirm()
+            )
+            col['confirm_msg_id'] = reply.message_id
+            return
 
     # Auto-register on first message
     data = await load_and_check(context.bot)
@@ -288,10 +316,11 @@ async def _start_next_queued(context: ContextTypes.DEFAULT_TYPE):
     note = f"\n<i>({remaining} more in queue)</i>" if remaining else ""
     prompt = await context.bot.send_message(
         nxt['chat_id'],
-        f"📄 <b>Next file ({nxt['user_name']}).</b>{note}\n\nStep 1/6 — Select level:",
+        f"📄 <b>Next file ({nxt['user_name']}).</b>{note}\n\nHow would you like to name this file?",
         message_thread_id=nxt.get('thread_id'),
         parse_mode='HTML',
-        reply_markup=kb_level()
+        reply_markup=kb_mode(),
+        disable_notification=True
     )
     context.user_data['collecting']['prompt_msg_id'] = prompt.message_id
 
@@ -337,13 +366,14 @@ async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Start paper info collection immediately
-    entry['step'] = 'level'
+    # Start paper info collection — ask how to name the file
+    entry['step'] = 'mode'
     context.user_data['collecting'] = entry
     prompt = await msg.reply_text(
-        f"📄 <b>{user.first_name}</b> uploaded a PDF.\n\nStep 1/6 — Select level:",
+        f"📄 <b>{user.first_name}</b> uploaded a PDF.\n\nHow would you like to name this file?",
         parse_mode='HTML',
-        reply_markup=kb_level()
+        reply_markup=kb_mode(),
+        disable_notification=True
     )
     context.user_data['collecting']['prompt_msg_id'] = prompt.message_id
 
@@ -362,7 +392,27 @@ async def on_paper_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     _, field, value = query.data.split(':', 2)
 
-    if field == 'level':
+    if field == 'mode':
+        if value == 'form':
+            col['step'] = 'level'
+            await query.edit_message_text(
+                "Step 1/6 — Select level:",
+                parse_mode='HTML',
+                reply_markup=kb_level()
+            )
+        else:  # manual
+            col['step'] = 'manual_name'
+            await query.edit_message_text(
+                "✏️ <b>Manual rename</b>\n\n"
+                "Type the filename below (without <code>.pdf</code>):\n"
+                "Example: <code>2026_S4_AM_G3_WA1_JSS</code>",
+                parse_mode='HTML',
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton('⬅️ Back', callback_data='pi:back:mode')
+                ]])
+            )
+
+    elif field == 'level':
         col['level'] = f'S{value}'
         col['step']  = 'subject'
         await query.edit_message_text(
@@ -411,9 +461,97 @@ async def on_paper_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Type the <b>school name</b> in the chat and send it.\n"
             "Example: <code>Anglican High</code>",
             message_thread_id=col.get('thread_id'),
-            parse_mode='HTML'
+            parse_mode='HTML',
+            disable_notification=True,
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton('⬅️ Back', callback_data='pi:back:year')
+            ]])
         )
         col['last_step_msg_id'] = last_step_msg.message_id
+
+    elif field == 'back':
+        target = value  # the step to go back TO
+
+        # Clear all fields set at or after the target step
+        clear_map = {
+            'mode':     ['level', 'subject', 'grade', 'exam_type', 'year', 'manual_filename'],
+            'level':    ['level', 'subject', 'grade', 'exam_type', 'year'],
+            'subject':  ['subject', 'grade', 'exam_type', 'year'],
+            'grade':    ['grade', 'exam_type', 'year'],
+            'examtype': ['exam_type', 'year'],
+            'year':     ['year'],
+            'school':   ['school'],
+        }
+        for f in clear_map.get(target, []):
+            col.pop(f, None)
+        col['step'] = target
+
+        if target == 'mode':
+            await query.edit_message_text(
+                f"📄 How would you like to name this file?",
+                parse_mode='HTML',
+                reply_markup=kb_mode()
+            )
+
+        elif target == 'school':
+            # Back from confirm: delete confirm msg and school text msg, re-show school prompt
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+            col.pop('confirm_msg_id', None)
+            if col.get('school_msg_id'):
+                try:
+                    await context.bot.delete_message(col['chat_id'], col['school_msg_id'])
+                except Exception:
+                    pass
+                col.pop('school_msg_id', None)
+            # last_step_msg is still visible with its Back button — user can type again
+
+        elif target == 'year':
+            # Back from school prompt: delete last_step_msg, restore year keyboard on prompt_msg
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+            col.pop('last_step_msg_id', None)
+            await context.bot.edit_message_text(
+                chat_id=col['chat_id'],
+                message_id=col['prompt_msg_id'],
+                text=f"Step 5/6 — Select year:\n<i>{summary_text(col)}</i>",
+                parse_mode='HTML',
+                reply_markup=kb_year()
+            )
+
+        elif target == 'level':
+            remaining = len(context.user_data.get('queue', []))
+            note = f"\n<i>({remaining} more in queue)</i>" if remaining else ""
+            await query.edit_message_text(
+                f"📄 <b>{col['user_name']}</b> uploaded a PDF.{note}\n\nStep 1/6 — Select level:",
+                parse_mode='HTML',
+                reply_markup=kb_level()
+            )
+
+        elif target == 'subject':
+            await query.edit_message_text(
+                f"Step 2/6 — Select subject:\n<i>Level: {col.get('level','—')} ✅</i>",
+                parse_mode='HTML',
+                reply_markup=kb_subject()
+            )
+
+        elif target == 'grade':
+            await query.edit_message_text(
+                f"Step 3/6 — Select grade:\n<i>{summary_text(col)}</i>",
+                parse_mode='HTML',
+                reply_markup=kb_grade()
+            )
+
+        elif target == 'examtype':
+            await query.edit_message_text(
+                f"Step 4/6 — Select exam type:\n<i>{summary_text(col)}</i>",
+                parse_mode='HTML',
+                reply_markup=kb_examtype()
+            )
 
     elif field == 'confirm':
         if value == 'no':
@@ -432,7 +570,7 @@ async def on_paper_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("⏳ Processing...")
         col = context.user_data.pop('collecting')
 
-        filename = build_filename(col)
+        filename = col.get('manual_filename') or build_filename(col)
 
         try:
             bio = io.BytesIO()
